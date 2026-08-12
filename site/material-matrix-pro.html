@@ -488,6 +488,17 @@
         </div>
     </header>
 
+    <!-- SHARED PROJECT BAR — scopes Windows 2/3/4 to a real Contractor+Owner(+Engineer) project.
+         Distinct from the local "saved projects" snapshot-slot dropdown inside Window 2 itself,
+         which is just a local preset feature unrelated to accounts/sharing. -->
+    <div class="bg-slate-900/60 border-b border-slate-800/60 px-4 sm:px-6 py-2 flex flex-wrap items-center gap-2">
+        <span class="text-[10px] font-bold uppercase tracking-wide text-slate-500">Shared project</span>
+        <select id="shared-project-select" onchange="onSharedProjectChange(this.value)" class="bg-slate-950 border border-slate-700 text-white rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:border-blue-500 max-w-[240px]"></select>
+        <button onclick="createSharedProjectPrompt()" class="text-[11px] font-semibold text-slate-300 hover:text-white border border-slate-700/60 rounded-lg px-2.5 py-1.5 bg-slate-800/40 hover:bg-slate-800 transition">+ New shared project</button>
+        <button onclick="inviteEngineerPrompt()" class="text-[11px] font-semibold text-slate-300 hover:text-white border border-slate-700/60 rounded-lg px-2.5 py-1.5 bg-slate-800/40 hover:bg-slate-800 transition">+ Invite engineer</button>
+        <span class="text-[10px] text-slate-500">Windows 2–4 need a shared project selected — Window 1's catalog is global.</span>
+    </div>
+
     <!-- WINDOW 1 VIEW -->
     <div id="window-one-view" class="flex flex-1 relative overflow-hidden flex-col md:flex-row">
         <div id="sidebar-overlay" onclick="toggleMobileSidebar()" class="fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-30 hidden md:hidden transition-opacity duration-200"></div>
@@ -2404,8 +2415,17 @@
             document.getElementById('auth-view').classList.replace('flex', 'hidden');
             document.body.classList.remove('auth-pending');
             await loadMaterialsFromApi();
+            await loadMyProjects();
+            // A project id restored from localStorage might no longer be one this account
+            // belongs to (different login, removed access, etc.) — drop it if so.
+            if (currentProjectId && !myProjects.some(p => String(p.id) === currentProjectId)) {
+                currentProjectId = null;
+                localStorage.setItem('w2_backend_project_id', '');
+            }
+            await loadBlueprintDataFromApi();
             applyRoleVisibility();
             initAppUI();
+            renderProjectSelector();
         }
 
         // Only a Supplier account can post/edit/delete materials — enforced server-side already
@@ -2483,11 +2503,126 @@
             materials = rows.map(applyApiMaterialShape);
         }
 
-        let blueprintRooms = JSON.parse(localStorage.getItem('w2_blueprint_rooms')) || [
-            { id: 'r1', name: 'Bath room', length: 2.0, width: 1.0, height: 3.0, group: 'Apartment A' }
-        ];
+        // Rooms and room→material mappings are shared, per-project data (see currentProjectId
+        // below) — populated from the API via loadBlueprintDataFromApi(), not localStorage.
+        let blueprintRooms = [];
+        let mappedRoomMaterials = [];
 
-        let mappedRoomMaterials = JSON.parse(localStorage.getItem('w2_mapped_materials')) || [];
+        // Which shared Project (Contractor+Owner+Engineer) is currently selected — distinct from
+        // the local "saved projects" snapshot-slot feature below, which is unrelated to accounts.
+        let currentProjectId = localStorage.getItem('w2_backend_project_id') || null;
+        let myProjects = [];
+
+        function applyApiRoomShape(row) {
+            // `extra` carries geom/mix-ratio fields as plain properties on the room object, exactly
+            // as the rest of Window 2's code already expects (room.geom, room.mixRatio, ...).
+            return {
+                ...(row.extra || {}),
+                id: String(row.id),
+                name: row.name,
+                length: row.length != null ? parseFloat(row.length) : 0,
+                width: row.width != null ? parseFloat(row.width) : 0,
+                height: row.height != null ? parseFloat(row.height) : 0,
+                group: row.group_name || 'Ungrouped'
+            };
+        }
+
+        // Splits a room object back into its core columns vs. everything else (geom, mix-ratio
+        // settings) that belongs in the `extra` JSONB blob — the inverse of applyApiRoomShape.
+        function extractRoomExtra(room) {
+            const { id, name, length, width, height, group, ...extra } = room;
+            return extra;
+        }
+
+        function applyApiMappingShape(row) {
+            return {
+                id: String(row.id),
+                roomId: row.room_id != null ? String(row.room_id) : PROJECT_SCOPE_ID,
+                materialId: String(row.material_id),
+                wastage: row.wastage != null ? parseFloat(row.wastage) : 0,
+                manualQty: row.manual_qty != null ? parseFloat(row.manual_qty) : 1,
+                surface: row.surface || null
+            };
+        }
+
+        function toApiRoomId(roomId) { return roomId === PROJECT_SCOPE_ID ? null : roomId; }
+
+        async function loadBlueprintDataFromApi() {
+            if (!currentProjectId) { blueprintRooms = []; mappedRoomMaterials = []; return; }
+            const [roomRows, mappingRows] = await Promise.all([
+                apiFetch(`/projects/${currentProjectId}/rooms`),
+                apiFetch(`/projects/${currentProjectId}/room-materials`)
+            ]);
+            blueprintRooms = roomRows.map(applyApiRoomShape);
+            mappedRoomMaterials = mappingRows.map(applyApiMappingShape);
+        }
+
+        // Persists a room's mix-ratio/geometry settings after `holder` (from getConcreteMixHolder)
+        // was just mutated in place — a no-op when holder is projectConcreteMix (the "Whole
+        // Project" pseudo-scope's mix settings, which intentionally stay local for now).
+        function persistConcreteMixHolder(holder) {
+            if (!holder || holder === projectConcreteMix || !currentProjectId) return;
+            apiFetch(`/projects/${currentProjectId}/rooms/${holder.id}`, {
+                method: 'PATCH', body: { extra: extractRoomExtra(holder) }
+            }).catch(() => {});
+        }
+
+        async function loadMyProjects() {
+            myProjects = await apiFetch('/projects');
+        }
+
+        function projectLabel(p) {
+            return `${p.name} (Contractor+Owner${p.engineer_id ? '+Engineer' : ''})`;
+        }
+
+        function renderProjectSelector() {
+            const select = document.getElementById('shared-project-select');
+            if (!select) return;
+            select.innerHTML = '<option value="">— select a shared project —</option>' +
+                myProjects.map(p => `<option value="${p.id}"${String(p.id) === currentProjectId ? ' selected' : ''}>${escapeHtml(projectLabel(p))}</option>`).join('');
+        }
+
+        async function onSharedProjectChange(value) {
+            currentProjectId = value || null;
+            localStorage.setItem('w2_backend_project_id', currentProjectId || '');
+            await loadBlueprintDataFromApi();
+            activeRoomId = null;
+            renderRoomsList();
+            evaluateActiveWorkspaceDisplay();
+        }
+
+        async function createSharedProjectPrompt() {
+            const name = prompt('Name this shared project (e.g. "123 Main St Renovation"):');
+            if (!name || !name.trim()) return;
+            const partnerEmail = prompt(
+                currentUser.role === 'contractor'
+                    ? "Enter the Owner's email to share this project with:"
+                    : "Enter the Contractor's email to share this project with:"
+            );
+            if (!partnerEmail || !partnerEmail.trim()) return;
+            try {
+                const project = await apiFetch('/projects', { method: 'POST', body: { name: name.trim(), partnerEmail: partnerEmail.trim() } });
+                await loadMyProjects();
+                renderProjectSelector();
+                await onSharedProjectChange(String(project.id));
+            } catch (err) {
+                alert(err.message);
+            }
+        }
+
+        async function inviteEngineerPrompt() {
+            if (!currentProjectId) { alert('Select a shared project first.'); return; }
+            const email = prompt("Enter the Engineer's email to add them to this project:");
+            if (!email || !email.trim()) return;
+            try {
+                await apiFetch(`/projects/${currentProjectId}/engineer`, { method: 'PATCH', body: { email: email.trim() } });
+                await loadMyProjects();
+                renderProjectSelector();
+                alert('Engineer added to this project.');
+            } catch (err) {
+                alert(err.message);
+            }
+        }
         let pendingSendMappingId = null; // Which W2 material mapping is queued for the Send-to-Ledger modal
         let pendingBoughtItemId = null;  // Which W3 ledger item is queued for the Bought Cash/Debt choice
         let explicitGroups = JSON.parse(localStorage.getItem('w2_explicit_groups')) || ['Ungrouped', 'Apartment A'];
@@ -2625,9 +2760,9 @@
             // (see loadMaterialsFromApi/saveMaterial) and currentUser replaces the supplier profile.
             // Folders stay local for this pass (see loadMaterialsFromApi's comment for why).
             localStorage.setItem('bm_folders', JSON.stringify(folders));
-            localStorage.setItem('w2_blueprint_rooms', JSON.stringify(blueprintRooms));
+            // w2_blueprint_rooms / w2_mapped_materials are gone — rooms and room-material mappings
+            // live in the backend now, scoped to currentProjectId (see loadBlueprintDataFromApi).
             localStorage.setItem('w2_project_concrete_mix', JSON.stringify(projectConcreteMix));
-            localStorage.setItem('w2_mapped_materials', JSON.stringify(mappedRoomMaterials));
             localStorage.setItem('w2_explicit_groups', JSON.stringify(explicitGroups));
             localStorage.setItem('w2_collapsed_groups', JSON.stringify(collapsedGroups));
             
@@ -3122,6 +3257,7 @@
             holder.mixRatioEnabled = document.getElementById('explore-ratio-toggle').checked;
             if (!holder.mixRatio) holder.mixRatio = '1:2:4';
             syncStorage();
+            persistConcreteMixHolder(holder);
             renderExploreConcreteMixPanel();
         }
 
@@ -3139,6 +3275,7 @@
             input.classList.add('hidden');
             holder.mixRatio = preset.value;
             syncStorage();
+            persistConcreteMixHolder(holder);
             renderExploreRatioHint(holder.mixRatio);
             const room = getScopeById(activeRoomId);
             if (room) renderExploreMixBuilder(room, getRoomGeometry(room).volume || 0);
@@ -3151,6 +3288,7 @@
             holder.mixRatio = val;
             renderExploreRatioHint(val);
             syncStorage();
+            persistConcreteMixHolder(holder);
             const room = getScopeById(activeRoomId);
             if (room) renderExploreMixBuilder(room, getRoomGeometry(room).volume || 0);
         }
@@ -3193,6 +3331,7 @@
             if (holder.mixBagSize == null) holder.mixBagSize = 50;
             if (holder.mixSandBulkingPct == null) holder.mixSandBulkingPct = 25;
             syncStorage();
+            persistConcreteMixHolder(holder);
 
             const roleCounts = {};
             solidSelected.forEach(m => { if (m.concreteRole) roleCounts[m.concreteRole] = (roleCounts[m.concreteRole] || 0) + 1; });
@@ -4326,34 +4465,33 @@
             lucide.createIcons();
         }
         
-        function toggleMaterialMapping(materialId) {
+        async function toggleMaterialMapping(materialId) {
             const qtyInput = document.getElementById(`qty-input-${materialId}`);
             const qty = qtyInput ? (parseInt(qtyInput.value) || 1) : 1;
 
             if (activeMappingGroupName !== null) {
                 const roomsInGroup = blueprintRooms.filter(r => (r.group || 'Ungrouped') === activeMappingGroupName);
                 const allHaveIt = roomsInGroup.every(r => mappedRoomMaterials.some(m => m.roomId === r.id && m.materialId === materialId));
-                
+
                 if (allHaveIt) {
-                    const roomIds = roomsInGroup.map(r => r.id);
-                    mappedRoomMaterials = mappedRoomMaterials.filter(m => !(roomIds.includes(m.roomId) && m.materialId === materialId));
+                    const toRemove = mappedRoomMaterials.filter(m => roomsInGroup.some(r => r.id === m.roomId) && m.materialId === materialId);
+                    await Promise.all(toRemove.map(m => apiFetch(`/projects/${currentProjectId}/room-materials/${m.id}`, { method: 'DELETE' })));
                 } else {
-                    roomsInGroup.forEach(r => {
+                    await Promise.all(roomsInGroup.map(r => {
                         const exists = mappedRoomMaterials.some(m => m.roomId === r.id && m.materialId === materialId);
-                        if (!exists) {
-                            mappedRoomMaterials.push({ id: 'am_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5), roomId: r.id, materialId, wastage: 0, manualQty: qty });
-                        }
-                    });
+                        if (exists) return null;
+                        return apiFetch(`/projects/${currentProjectId}/room-materials`, { method: 'POST', body: { roomId: r.id, materialId, wastage: 0, manualQty: qty } });
+                    }));
                 }
             } else if (activeRoomId) {
-                const idx = mappedRoomMaterials.findIndex(m => m.roomId === activeRoomId && m.materialId === materialId);
-                if (idx > -1) { 
-                    mappedRoomMaterials.splice(idx, 1); 
-                } else { 
-                    mappedRoomMaterials.push({ id: 'am_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5), roomId: activeRoomId, materialId, wastage: 0, manualQty: qty }); 
+                const existing = mappedRoomMaterials.find(m => m.roomId === activeRoomId && m.materialId === materialId);
+                if (existing) {
+                    await apiFetch(`/projects/${currentProjectId}/room-materials/${existing.id}`, { method: 'DELETE' });
+                } else {
+                    await apiFetch(`/projects/${currentProjectId}/room-materials`, { method: 'POST', body: { roomId: activeRoomId, materialId, wastage: 0, manualQty: qty } });
                 }
             }
-            syncStorage();
+            await loadBlueprintDataFromApi();
             document.getElementById('explore-search-input').value = '';
             renderModalMaterials();
             renderExploreConcreteMixPanel();
@@ -4363,9 +4501,9 @@
             }
         }
 
-        function deleteMapping(mappingId) {
-            mappedRoomMaterials = mappedRoomMaterials.filter(m => m.id !== mappingId);
-            syncStorage();
+        async function deleteMapping(mappingId) {
+            await apiFetch(`/projects/${currentProjectId}/room-materials/${mappingId}`, { method: 'DELETE' });
+            await loadBlueprintDataFromApi();
             const room = getScopeById(activeRoomId);
             if (room) calculateAndRenderMappedMaterials(room);
             renderModalMaterials();
@@ -4376,14 +4514,14 @@
         // shouldn't have (e.g. leftover from an earlier group "Apply All", or from testing before a
         // fix) — clears every material mapped to the CURRENTLY ACTIVE room only, leaving every other
         // room's mappings untouched.
-        function clearAllMappingsForActiveRoom() {
+        async function clearAllMappingsForActiveRoom() {
             if (!activeRoomId) return;
             const room = getScopeById(activeRoomId);
             const before = mappedRoomMaterials.filter(m => m.roomId === activeRoomId).length;
             if (before === 0) { alert('Nothing is mapped to this room yet.'); return; }
             if (!confirm(`Remove all ${before} material mapping${before === 1 ? '' : 's'} from "${room ? room.name : 'this room'}"? This only affects this room — every other room's mappings stay as they are.`)) return;
-            mappedRoomMaterials = mappedRoomMaterials.filter(m => m.roomId !== activeRoomId);
-            syncStorage();
+            await apiFetch(`/projects/${currentProjectId}/room-materials?roomId=${activeRoomId}`, { method: 'DELETE' });
+            await loadBlueprintDataFromApi();
             if (room) calculateAndRenderMappedMaterials(room);
             renderModalMaterials();
             renderExploreConcreteMixPanel();
@@ -4401,48 +4539,48 @@
             }
         }
 
-        function deleteGroup(groupName) {
+        async function deleteGroup(groupName) {
             if (groupName === 'Ungrouped') {
                 alert("The default 'Ungrouped' category cannot be deleted.");
                 return;
             }
             const roomsInGroup = blueprintRooms.filter(r => (r.group || 'Ungrouped') === groupName);
-            const msg = roomsInGroup.length > 0 
-                ? `Delete group "${groupName}"? Its ${roomsInGroup.length} room(s) will be moved to 'Ungrouped'.` 
+            const msg = roomsInGroup.length > 0
+                ? `Delete group "${groupName}"? Its ${roomsInGroup.length} room(s) will be moved to 'Ungrouped'.`
                 : `Delete empty group "${groupName}"?`;
-            
+
             if (confirm(msg)) {
-                blueprintRooms.forEach(r => {
-                    if (r.group === groupName) r.group = 'Ungrouped';
-                });
+                await Promise.all(roomsInGroup.map(r => apiFetch(`/projects/${currentProjectId}/rooms/${r.id}`, { method: 'PATCH', body: { group: 'Ungrouped' } })));
                 explicitGroups = explicitGroups.filter(g => g !== groupName);
                 delete collapsedGroups[groupName];
+                await loadBlueprintDataFromApi();
                 syncStorage();
                 renderRoomsList();
                 evaluateActiveWorkspaceDisplay();
             }
         }
 
-        function moveRoomGroupPrompt(roomId) {
+        async function moveRoomGroupPrompt(roomId) {
             const room = blueprintRooms.find(r => r.id === roomId);
             if (!room) return;
-            
+
             const allGroups = Array.from(new Set(['Ungrouped', ...explicitGroups, ...blueprintRooms.map(r => r.group || 'Ungrouped')]));
             const groupListStr = allGroups.map((g, idx) => `${idx + 1}. ${g}`).join('\n');
-            
+
             const target = prompt(`Move "${room.name}" to which group?\nEnter exact name or choose a number:\n\n${groupListStr}`, room.group || 'Ungrouped');
-            
+
             if (target !== null && target.trim() !== '') {
                 let finalGroup = target.trim();
                 const num = parseInt(finalGroup);
                 if (!isNaN(num) && num >= 1 && num <= allGroups.length) {
                     finalGroup = allGroups[num - 1];
                 }
-                
-                room.group = finalGroup;
+
+                await apiFetch(`/projects/${currentProjectId}/rooms/${roomId}`, { method: 'PATCH', body: { group: finalGroup } });
                 if (!explicitGroups.includes(finalGroup) && finalGroup !== 'Ungrouped') {
                     explicitGroups.push(finalGroup);
                 }
+                await loadBlueprintDataFromApi();
                 syncStorage();
                 renderRoomsList();
             }
@@ -5044,25 +5182,26 @@
                 </div>`;
         }
 
-        function assignMaterialToRun(key, materialId, kind) {
+        async function assignMaterialToRun(key, materialId, kind) {
             if (!materialId) return;
             const driverId = runAssignmentDriverId(key, kind);
-            let entry = mappedRoomMaterials.find(x => x.roomId === PROJECT_SCOPE_ID && x.materialId === materialId && x.surface === driverId);
+            const entry = mappedRoomMaterials.find(x => x.roomId === PROJECT_SCOPE_ID && x.materialId === materialId && x.surface === driverId);
             if (!entry) {
-                entry = { id: 'am_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5), roomId: PROJECT_SCOPE_ID, materialId, wastage: 0, manualQty: 1, surface: driverId };
-                mappedRoomMaterials.push(entry);
+                await apiFetch(`/projects/${currentProjectId}/room-materials`, { method: 'POST', body: { roomId: null, materialId, wastage: 0, manualQty: 1, surface: driverId } });
+                await loadBlueprintDataFromApi();
             }
-            syncStorage();
             renderProjectQuantityPanel();
             const projectScope = getScopeById(PROJECT_SCOPE_ID);
             if (projectScope) calculateAndRenderMappedMaterials(projectScope);
         }
 
-        function clearMaterialFromRun(key, materialId, kind) {
+        async function clearMaterialFromRun(key, materialId, kind) {
             const driverId = runAssignmentDriverId(key, kind);
-            const idx = mappedRoomMaterials.findIndex(x => x.roomId === PROJECT_SCOPE_ID && x.materialId === materialId && x.surface === driverId);
-            if (idx > -1) mappedRoomMaterials.splice(idx, 1);
-            syncStorage();
+            const entry = mappedRoomMaterials.find(x => x.roomId === PROJECT_SCOPE_ID && x.materialId === materialId && x.surface === driverId);
+            if (entry) {
+                await apiFetch(`/projects/${currentProjectId}/room-materials/${entry.id}`, { method: 'DELETE' });
+                await loadBlueprintDataFromApi();
+            }
             renderProjectQuantityPanel();
             const projectScope = getScopeById(PROJECT_SCOPE_ID);
             if (projectScope) calculateAndRenderMappedMaterials(projectScope);
@@ -5142,12 +5281,14 @@
 
         // Lets a blueprint-traced room fall back to plain typed dimensions — useful if the layout was
         // re-drawn and the snapshot is no longer the shape the user wants to cost against.
-        function detachRoomGeometry(roomId) {
+        async function detachRoomGeometry(roomId) {
             const room = blueprintRooms.find(r => r.id === roomId);
             if (!room || !room.geom) return;
             if (!confirm("Detach this room from its traced Blueprint geometry?\n\nQuantities will fall back to the plain L × W × H box, so wall areas will no longer account for the real wall heights or the doors and windows. You can re-trace and send it again at any time.")) return;
-            delete room.geom;
-            syncStorage();
+            const newExtra = extractRoomExtra(room);
+            delete newExtra.geom;
+            await apiFetch(`/projects/${currentProjectId}/rooms/${roomId}`, { method: 'PATCH', body: { extra: newExtra } });
+            await loadBlueprintDataFromApi();
             renderRoomsList();
             evaluateActiveWorkspaceDisplay();
         }
@@ -5262,28 +5403,28 @@
             lucide.createIcons();
         }
 
-        function updateMappingWastage(mappingId, val) {
+        async function updateMappingWastage(mappingId, val) {
             const m = mappedRoomMaterials.find(x => x.id === mappingId);
-            if (m) {
-                m.wastage = parseFloat(val) || 0;
-                syncStorage();
-                if (activeRoomId) {
-                    const room = getScopeById(activeRoomId);
-                    if (room) calculateAndRenderMappedMaterials(room);
-                }
+            if (!m) return;
+            const wastage = parseFloat(val) || 0;
+            await apiFetch(`/projects/${currentProjectId}/room-materials/${mappingId}`, { method: 'PATCH', body: { wastage } });
+            await loadBlueprintDataFromApi();
+            if (activeRoomId) {
+                const room = getScopeById(activeRoomId);
+                if (room) calculateAndRenderMappedMaterials(room);
             }
         }
 
-        function updateMappingQty(mappingId, val) {
+        async function updateMappingQty(mappingId, val) {
             const m = mappedRoomMaterials.find(x => x.id === mappingId);
-            if (m) {
-                const parsed = parseFloat(val);
-                m.manualQty = isFinite(parsed) && parsed >= 0 ? parsed : 1;
-                syncStorage();
-                if (activeRoomId) {
-                    const room = getScopeById(activeRoomId);
-                    if (room) calculateAndRenderMappedMaterials(room);
-                }
+            if (!m) return;
+            const parsed = parseFloat(val);
+            const manualQty = isFinite(parsed) && parsed >= 0 ? parsed : 1;
+            await apiFetch(`/projects/${currentProjectId}/room-materials/${mappingId}`, { method: 'PATCH', body: { manualQty } });
+            await loadBlueprintDataFromApi();
+            if (activeRoomId) {
+                const room = getScopeById(activeRoomId);
+                if (room) calculateAndRenderMappedMaterials(room);
             }
         }
 
@@ -5423,7 +5564,7 @@
             document.getElementById('room-modal').classList.replace('flex', 'hidden');
         }
 
-        function saveRoom(event) {
+        async function saveRoom(event) {
             event.preventDefault();
             const id = document.getElementById('edit-room-id').value;
             const name = document.getElementById('room-name').value.trim();
@@ -5433,29 +5574,28 @@
             const height = parseFloat(document.getElementById('room-height').value) || 0;
 
             if (!name) return;
+            if (!currentProjectId) { alert('Select or create a shared project first.'); return; }
 
+            const payload = { name, group, length, width, height };
             if (id) {
-                const room = blueprintRooms.find(r => r.id === id);
-                if (room) {
-                    room.name = name; room.group = group; room.length = length; room.width = width; room.height = height;
-                }
+                await apiFetch(`/projects/${currentProjectId}/rooms/${id}`, { method: 'PATCH', body: payload });
             } else {
-                const newRoom = { id: 'r_' + Date.now(), name, group, length, width, height };
-                blueprintRooms.push(newRoom);
+                await apiFetch(`/projects/${currentProjectId}/rooms`, { method: 'POST', body: payload });
             }
 
             if (group !== 'Ungrouped' && !explicitGroups.includes(group)) {
                 explicitGroups.push(group);
             }
 
+            await loadBlueprintDataFromApi();
             syncStorage(); closeRoomModal(); renderRoomsList(); evaluateActiveWorkspaceDisplay();
         }
 
-        function deleteRoom(id) {
+        async function deleteRoom(id) {
             if (confirm("Delete this room setup? All corresponding material mappings will be lost.")) {
-                blueprintRooms = blueprintRooms.filter(r => r.id !== id);
-                mappedRoomMaterials = mappedRoomMaterials.filter(m => m.roomId !== id);
+                await apiFetch(`/projects/${currentProjectId}/rooms/${id}`, { method: 'DELETE' });
                 if (activeRoomId === id) activeRoomId = null;
+                await loadBlueprintDataFromApi();
                 syncStorage(); renderRoomsList(); evaluateActiveWorkspaceDisplay();
             }
         }
@@ -5491,13 +5631,13 @@
             document.getElementById('blueprint-embed-root').classList.replace('flex', 'hidden');
         }
 
-        function dropRoom(ev, groupName) {
+        async function dropRoom(ev, groupName) {
             ev.preventDefault();
             const roomId = ev.dataTransfer.getData("roomId");
             const room = blueprintRooms.find(r => r.id === roomId);
             if (room) {
-                room.group = groupName;
-                syncStorage();
+                await apiFetch(`/projects/${currentProjectId}/rooms/${roomId}`, { method: 'PATCH', body: { group: groupName } });
+                await loadBlueprintDataFromApi();
                 renderRoomsList();
                 evaluateActiveWorkspaceDisplay();
             }
@@ -8034,11 +8174,12 @@
             }).join('') + `<datalist id="sa-group-options">${knownGroups.map(g => `<option value="${g}">`).join('')}</datalist>`;
         }
 
-        function sendAreaToRoomList(idx) {
+        async function sendAreaToRoomList(idx) {
             const area = measuredAreas[idx];
             if (!area) return;
             const geom = computeAreaGeometry(area.nodeIndices);
             if (!geom) { alert("Couldn't read this boundary — try re-tracing it."); return; }
+            if (!currentProjectId) { alert('Select or create a shared project first.'); return; }
 
             const name = (document.getElementById(`sa-name-${idx}`).value || '').trim()
                 || `Room ${blueprintRooms.length + 1}`;
@@ -8048,19 +8189,16 @@
             // them (the room edit modal, older saved projects) keeps showing sane numbers — the real
             // quantities all come from `geom`.
             const xs = geom.polygon.map(p => p.x), ys = geom.polygon.map(p => p.y);
-            const room = {
-                id: 'r_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4),
-                name, group,
-                length: +(Math.max(...xs) - Math.min(...xs)).toFixed(3),
-                width: +(Math.max(...ys) - Math.min(...ys)).toFixed(3),
-                height: +(geom.avgHeight || 0).toFixed(3),
-                geom
-            };
-            blueprintRooms.push(room);
-            area.sentRoomId = room.id;
+            const length = +(Math.max(...xs) - Math.min(...xs)).toFixed(3);
+            const width = +(Math.max(...ys) - Math.min(...ys)).toFixed(3);
+            const height = +(geom.avgHeight || 0).toFixed(3);
+
+            const created = await apiFetch(`/projects/${currentProjectId}/rooms`, { method: 'POST', body: { name, group, length, width, height, extra: { geom } } });
+            area.sentRoomId = String(created.id);
 
             if (group !== 'Ungrouped' && !explicitGroups.includes(group)) explicitGroups.push(group);
 
+            await loadBlueprintDataFromApi();
             syncStorage();
             renderRoomsList();
             evaluateActiveWorkspaceDisplay();

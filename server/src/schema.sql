@@ -68,16 +68,22 @@ CREATE TABLE IF NOT EXISTS blueprint_rooms (
   length     NUMERIC,
   width      NUMERIC,
   height     NUMERIC,
-  group_name TEXT
+  group_name TEXT,
+  -- Traced geometry (`geom`) and per-room concrete-mix settings (mixRatio,
+  -- mixAssignments, ...) — opaque blob, same precedent as materials.calc.
+  extra      JSONB NOT NULL DEFAULT '{}'
 );
 
 CREATE TABLE IF NOT EXISTS mapped_room_materials (
   id          SERIAL PRIMARY KEY,
   project_id  INTEGER NOT NULL REFERENCES projects(id),
-  room_id     INTEGER NOT NULL REFERENCES blueprint_rooms(id),
-  material_id INTEGER NOT NULL REFERENCES materials(id),
+  -- NULL means the frontend's PROJECT_SCOPE_ID sentinel — a "whole project"
+  -- mapping (pipe/fitting driver assignment) not tied to any real room.
+  room_id     INTEGER REFERENCES blueprint_rooms(id) ON DELETE CASCADE,
+  material_id INTEGER NOT NULL REFERENCES materials(id) ON DELETE CASCADE,
   wastage     NUMERIC,
-  manual_qty  NUMERIC
+  manual_qty  NUMERIC,
+  surface     TEXT
 );
 
 CREATE TABLE IF NOT EXISTS ledger_items (

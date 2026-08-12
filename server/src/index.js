@@ -6,6 +6,9 @@ const cookieParser = require('cookie-parser');
 
 const authRoutes = require('./routes/auth');
 const materialsRoutes = require('./routes/materials');
+const projectsRoutes = require('./routes/projects');
+const blueprintRoomsRoutes = require('./routes/blueprintRooms');
+const mappedRoomMaterialsRoutes = require('./routes/mappedRoomMaterials');
 
 const app = express();
 
@@ -17,6 +20,9 @@ app.get('/api/health', (req, res) => res.json({ ok: true }));
 
 app.use('/api/auth', authRoutes);
 app.use('/api/materials', materialsRoutes);
+app.use('/api/projects', projectsRoutes);
+app.use('/api/projects/:projectId/rooms', blueprintRoomsRoutes);
+app.use('/api/projects/:projectId/room-materials', mappedRoomMaterialsRoutes);
 
 // Centralized error handler so a thrown/rejected error in any route
 // returns JSON instead of Express's default HTML error page.
