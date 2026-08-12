@@ -9,6 +9,8 @@ const materialsRoutes = require('./routes/materials');
 const projectsRoutes = require('./routes/projects');
 const blueprintRoomsRoutes = require('./routes/blueprintRooms');
 const mappedRoomMaterialsRoutes = require('./routes/mappedRoomMaterials');
+const ledgerFoldersRoutes = require('./routes/ledgerFolders');
+const ledgerItemsRoutes = require('./routes/ledgerItems');
 
 const app = express();
 
@@ -23,6 +25,8 @@ app.use('/api/materials', materialsRoutes);
 app.use('/api/projects', projectsRoutes);
 app.use('/api/projects/:projectId/rooms', blueprintRoomsRoutes);
 app.use('/api/projects/:projectId/room-materials', mappedRoomMaterialsRoutes);
+app.use('/api/projects/:projectId/ledger-folders', ledgerFoldersRoutes);
+app.use('/api/projects/:projectId/ledger-items', ledgerItemsRoutes);
 
 // Centralized error handler so a thrown/rejected error in any route
 // returns JSON instead of Express's default HTML error page.

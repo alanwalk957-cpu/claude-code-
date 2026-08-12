@@ -22,6 +22,18 @@ CREATE TABLE IF NOT EXISTS projects (
   contractor_id  INTEGER REFERENCES users(id),
   owner_id       INTEGER REFERENCES users(id),
   engineer_id    INTEGER REFERENCES users(id),
+  -- Shared Ledger (Window 3) project-level figures — these feed real money math both
+  -- parties rely on, so they live here rather than per-browser. Each "direct paid" side
+  -- is its own tiny propose/approve pair: the amount only moves once the OTHER party
+  -- approves the pending value (mirrors the app's existing bespoke triplet, not the
+  -- generic pending_actions table below — see routes/projects.js).
+  contractor_profit_percent          NUMERIC NOT NULL DEFAULT 10,
+  contractor_direct_paid_amount      NUMERIC NOT NULL DEFAULT 0,
+  contractor_direct_paid_status      TEXT NOT NULL DEFAULT 'Approved',
+  contractor_direct_paid_pending_val NUMERIC NOT NULL DEFAULT 0,
+  owner_direct_paid_amount           NUMERIC NOT NULL DEFAULT 0,
+  owner_direct_paid_status           TEXT NOT NULL DEFAULT 'Approved',
+  owner_direct_paid_pending_val      NUMERIC NOT NULL DEFAULT 0,
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -86,25 +98,53 @@ CREATE TABLE IF NOT EXISTS mapped_room_materials (
   surface     TEXT
 );
 
+-- Unilateral CRUD (no approval gate) — matches the app's current folder behavior exactly;
+-- either party can rename/delete a category without the other's sign-off.
+CREATE TABLE IF NOT EXISTS ledger_folders (
+  id         SERIAL PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id),
+  name       TEXT NOT NULL,
+  budget     NUMERIC
+);
+
+-- The Shared Ledger's mutual-approval expense items. `status`/`pending_action`/`pending_data`/
+-- `requester` mirror the app's existing pattern directly on the row (not the generic
+-- pending_actions table) since every consumer already expects these exact fields. `requester`,
+-- `creator`, `actual_payer`, `payer`, `bought_requested_by`, `bought_by` store the role label
+-- ('Contractor'/'Owner') rather than a user id — deliberately the least-disruptive path per the
+-- migration research, since the frontend already treats these as role strings everywhere; real
+-- enforcement of "who is actually allowed to act as that role" happens in the route handlers via
+-- currentUser.id vs. the project's contractor_id/owner_id, not by trusting this string.
 CREATE TABLE IF NOT EXISTS ledger_items (
-  id             SERIAL PRIMARY KEY,
-  project_id     INTEGER NOT NULL REFERENCES projects(id),
-  folder_id      TEXT,
-  name           TEXT NOT NULL,
-  supplier       TEXT,
-  price          NUMERIC,
-  quantity       NUMERIC,
-  unit           TEXT,
-  payment_status TEXT,
-  actual_payer   TEXT,
-  payer          TEXT,
-  due_date       DATE,
-  cost_code      TEXT,
-  creator_id     INTEGER REFERENCES users(id),
-  status         TEXT NOT NULL DEFAULT 'Approved',
-  bought_status  TEXT NOT NULL DEFAULT 'Not Bought',
-  bought_by      INTEGER REFERENCES users(id),
-  created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+  id                  SERIAL PRIMARY KEY,
+  project_id          INTEGER NOT NULL REFERENCES projects(id),
+  folder_id           TEXT,
+  name                TEXT NOT NULL,
+  supplier            TEXT,
+  price               NUMERIC,
+  quantity            NUMERIC,
+  unit                TEXT,
+  payment_status      TEXT,
+  actual_payer        TEXT,
+  payer               TEXT,
+  due_date            DATE,
+  cost_code           TEXT,
+  image               TEXT,
+  attachments         JSONB NOT NULL DEFAULT '[]',
+  linked_from_room    BOOLEAN NOT NULL DEFAULT false,
+  creator             TEXT,
+  status              TEXT NOT NULL DEFAULT 'Approved',
+  pending_action      TEXT,
+  pending_data        JSONB,
+  requester           TEXT,
+  bought_status       TEXT NOT NULL DEFAULT 'Not Bought',
+  bought_requested_by TEXT,
+  bought_method       TEXT,
+  bought_by           TEXT,
+  -- Soft delete: an approved deletion sets this instead of removing the row, which is both
+  -- the "Recently Deleted" list (deleted_at IS NOT NULL, newest 20) and its restore path.
+  deleted_at          TIMESTAMPTZ,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- Generalized version of the app's existing "one party proposes, the other

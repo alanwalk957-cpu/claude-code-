@@ -1267,24 +1267,16 @@
         <main class="flex-1 p-4 sm:p-6 lg:p-8 overflow-y-auto w-full">
             <div class="max-w-6xl mx-auto space-y-6">
                 
-                <!-- MULTI-PARTY SIMULATION BANNER -->
-                <div class="bg-gradient-to-r from-slate-900 via-slate-900 to-emerald-950/20 p-4 rounded-2xl border border-slate-800/80 flex flex-col sm:flex-row justify-between items-center gap-4 shadow-xl">
-                    <div class="flex items-center gap-3">
-                        <div class="bg-emerald-500/10 border border-emerald-500/30 w-10 h-10 rounded-xl flex items-center justify-center text-emerald-400 shadow-inner">
-                            <i data-lucide="user-check" class="w-5 h-5"></i>
-                        </div>
-                        <div>
-                            <h3 class="text-sm font-black text-white uppercase tracking-wider">Practice Mode Environment</h3>
-                            <p class="text-xs text-slate-400">Swap active roles instantly to practice and review the strict mutual-approval workflow simulation architecture.</p>
-                        </div>
+                <!-- YOUR ROLE ON THIS PROJECT — read-only. Replaces the old "Practice Mode" role
+                     toggle: which party you are is now determined by your real logged-in account
+                     vs. the selected project's Contractor/Owner, not a button anyone could click. -->
+                <div class="bg-gradient-to-r from-slate-900 via-slate-900 to-emerald-950/20 p-4 rounded-2xl border border-slate-800/80 flex items-center gap-4 shadow-xl">
+                    <div class="bg-emerald-500/10 border border-emerald-500/30 w-10 h-10 rounded-xl flex items-center justify-center text-emerald-400 shadow-inner">
+                        <i data-lucide="user-check" class="w-5 h-5"></i>
                     </div>
-                    <div class="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800 w-full sm:w-auto justify-center">
-                        <button id="role-btn-owner" onclick="setW3Role('Owner')" class="px-4 py-2 rounded-lg text-xs font-bold transition-all duration-200 bg-emerald-600 text-white shadow flex items-center gap-1.5">
-                            <i data-lucide="shield" class="w-3.5 h-3.5"></i> Owner Mode
-                        </button>
-                        <button id="role-btn-contractor" onclick="setW3Role('Contractor')" class="px-4 py-2 rounded-lg text-xs font-bold transition-all duration-200 text-slate-400 hover:text-white flex items-center gap-1.5">
-                            <i data-lucide="hammer" class="w-3.5 h-3.5"></i> Contractor Mode
-                        </button>
+                    <div>
+                        <h3 class="text-sm font-black text-white uppercase tracking-wider">Your role on this project: <span id="w3-my-role-label" class="text-emerald-400">—</span></h3>
+                        <p class="text-xs text-slate-400">Determined by your account and the selected shared project — the other party must approve anything you propose here.</p>
                     </div>
                 </div>
 
@@ -2331,20 +2323,25 @@
         function onW3SearchInput(val) { w3SearchQuery = val; renderW3Ledger(); }
         function onW3StatusFilterChange(val) { w3StatusFilter = val; renderW3Ledger(); }
         function onW3SortChange(val) { w3SortBy = val; renderW3Ledger(); }
-        let w3CurrentRole = localStorage.getItem('w3_current_role') || 'Owner';
-        let w3ContractorProfitPercent = parseFloat(localStorage.getItem('w3_profit_percent')) || 10;
+        // Derived, not a toggle: which role (if any) currentUser holds on the selected
+        // project. Set by applyLedgerRoleForSelectedProject(), consumed by setW3Role().
+        let w3CurrentRole = 'Owner';
+        // Project-level ledger figures — loaded from the project row itself (see
+        // loadLedgerDataFromApi) rather than localStorage, since both parties must see the
+        // same numbers.
+        let w3ContractorProfitPercent = 10;
         let temporaryCBBase64Image = '';
 
-        // Custom Reciprocal Workflows Variables State
-        let contractorDirectPaidAmount = parseFloat(localStorage.getItem('w3_contractor_direct_paid')) || 0;
-        let contractorDirectPaidStatus = localStorage.getItem('w3_contractor_direct_status') || 'Approved';
-        let contractorDirectPaidPendingValue = parseFloat(localStorage.getItem('w3_contractor_direct_pending_val')) || 0;
+        let contractorDirectPaidAmount = 0;
+        let contractorDirectPaidStatus = 'Approved';
+        let contractorDirectPaidPendingValue = 0;
 
-        let ownerDirectPaidAmount = parseFloat(localStorage.getItem('w3_owner_direct_paid')) || 0;
-        let ownerDirectPaidStatus = localStorage.getItem('w3_owner_direct_status') || 'Approved';
-        let ownerDirectPaidPendingValue = parseFloat(localStorage.getItem('w3_owner_direct_pending_val')) || 0;
+        let ownerDirectPaidAmount = 0;
+        let ownerDirectPaidStatus = 'Approved';
+        let ownerDirectPaidPendingValue = 0;
 
-        // Contractor Direct Expense Books
+        // Contractor's private direct-expense books — intentionally left local for this
+        // pass (never shared with the Owner even today; see the Window 3 migration notes).
         let contractorBooks = JSON.parse(localStorage.getItem('w3_contractor_books')) || [];
         let contractorBooksSectionHidden = localStorage.getItem('w3_cb_section_hidden') === 'true';
 
@@ -2423,6 +2420,7 @@
                 localStorage.setItem('w2_backend_project_id', '');
             }
             await loadBlueprintDataFromApi();
+            await loadLedgerDataFromApi();
             applyRoleVisibility();
             initAppUI();
             renderProjectSelector();
@@ -2586,9 +2584,12 @@
             currentProjectId = value || null;
             localStorage.setItem('w2_backend_project_id', currentProjectId || '');
             await loadBlueprintDataFromApi();
+            await loadLedgerDataFromApi();
             activeRoomId = null;
             renderRoomsList();
             evaluateActiveWorkspaceDisplay();
+            renderW3Folders();
+            renderW3Ledger();
         }
 
         async function createSharedProjectPrompt() {
@@ -2628,40 +2629,102 @@
         let explicitGroups = JSON.parse(localStorage.getItem('w2_explicit_groups')) || ['Ungrouped', 'Apartment A'];
         let collapsedGroups = JSON.parse(localStorage.getItem('w2_collapsed_groups')) || {};
 
-        // Window 3 Default Persistent Mock Objects
-        let w3Folders = JSON.parse(localStorage.getItem('w3_folders')) || [
-            { id: 'all', name: 'General Ledger', hidden: false },
-            { id: 'wf1', name: 'Plumbing Works', hidden: false },
-            { id: 'wf2', name: 'Foundation Layer', hidden: false },
-            { id: 'wf3', name: 'Electrical Hub', hidden: false }
-        ];
+        // Window 3 (Shared Ledger) state — populated from the API via loadLedgerDataFromApi(),
+        // scoped to currentProjectId, same as Window 2's rooms/mappings. 'all' is a synthetic
+        // folder (like Window 1's), the rest come from ledger_folders.
+        let w3Folders = [];
+        let w3LedgerItems = [];
 
-        let w3LedgerItems = JSON.parse(localStorage.getItem('w3_ledger_items')) || [
-            {
-                id: 'w3i_1', folderId: 'all', name: 'Premium Portland Cement Bags', supplier: 'Delta Supply Hub',
-                price: 12.50, quantity: 100, unit: 'Bags', paymentStatus: 'Paid in Cash',
-                actualPayer: 'Contractor', payer: 'Contractor', creator: 'Contractor', status: 'Approved'
-            },
-            {
-                id: 'w3i_2', folderId: 'wf2', name: 'Heavy Structural Grade Rebar Mesh', supplier: 'Titan Steel Mills',
-                price: 75.50, quantity: 45, unit: 'Pieces', paymentStatus: 'Debt',
-                actualPayer: 'Owner', payer: 'Owner', creator: 'Contractor', status: 'Approved'
-            }
-        ];
-
-        // "Who We Owe" — settled supplier debt history. Paying a supplier off doesn't delete the
-        // underlying ledger items (they stay as the accounting record); it flags them settled and
-        // logs one payment record here so there's a clean, separate history of what's been paid.
+        // "Who We Owe" settled-debt history and the Contractor's private direct-expense books are
+        // deliberately left out of this pass (see the Window 3 migration notes) — supplier payment
+        // history stays local for now, contractorBooks (declared above) already does too.
         let w3SupplierPayments = JSON.parse(localStorage.getItem('w3_supplier_payments')) || [];
 
-        // Recently Deleted — an approved delete moves the item here (capped at 20) instead of
-        // erasing it outright, so a mistaken delete on real money data can still be undone.
-        let w3DeletedItems = JSON.parse(localStorage.getItem('w3_deleted_items')) || [];
+        // Recently Deleted — server-backed via a soft-delete flag (deleted_at) on ledger_items now,
+        // not a separate array serialized to localStorage.
+        let w3DeletedItems = [];
 
-        // Activity/audit log — every money-moving or record-changing action gets one timestamped
-        // entry (who did it, what happened). Capped at 500 so it can't grow forever; oldest entries
-        // drop off first since recent activity is what anyone actually needs to check.
-        let w3ActivityLog = JSON.parse(localStorage.getItem('w3_activity_log')) || [];
+        // Activity/audit log — server-backed now (activity_log table), scoped to this project.
+        let w3ActivityLog = [];
+
+        function findMyProject() {
+            return myProjects.find(p => String(p.id) === currentProjectId) || null;
+        }
+
+        function myProjectRole(project) {
+            if (!project || !currentUser) return null;
+            if (currentUser.id === project.contractor_id) return 'Contractor';
+            if (currentUser.id === project.owner_id) return 'Owner';
+            return null;
+        }
+
+        function applyApiLedgerFolderShape(row) {
+            return { id: String(row.id), name: row.name, budget: row.budget != null ? parseFloat(row.budget) : null };
+        }
+
+        function applyApiLedgerItemShape(row) {
+            return {
+                id: String(row.id), folderId: row.folder_id, name: row.name, supplier: row.supplier,
+                price: row.price != null ? parseFloat(row.price) : 0, quantity: row.quantity != null ? parseFloat(row.quantity) : 0,
+                unit: row.unit, paymentStatus: row.payment_status, actualPayer: row.actual_payer, payer: row.payer,
+                dueDate: row.due_date, costCode: row.cost_code, image: row.image, attachments: row.attachments || [],
+                linkedFromRoom: row.linked_from_room, creator: row.creator, status: row.status,
+                pendingAction: row.pending_action, pendingData: row.pending_data, requester: row.requester,
+                boughtStatus: row.bought_status, boughtRequestedBy: row.bought_requested_by, boughtMethod: row.bought_method,
+                boughtBy: row.bought_by, createdAt: new Date(row.created_at).getTime(),
+                deletedAt: row.deleted_at ? new Date(row.deleted_at).getTime() : null
+            };
+        }
+
+        function applyApiActivityShape(row) {
+            const created = new Date(row.created_at);
+            return {
+                id: String(row.id), at: created.getTime(),
+                atLabel: created.toLocaleDateString() + ' ' + created.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                actor: row.actorRole || row.company_name || row.email || 'Unknown', action: row.action, detail: row.detail || ''
+            };
+        }
+
+        // Determines whether currentUser is a real ledger party (Contractor/Owner) on the
+        // selected project and loads all Window 3 data if so — called after project switch
+        // and at startup, mirroring loadBlueprintDataFromApi's role in Window 2.
+        async function loadLedgerDataFromApi() {
+            if (!currentProjectId) {
+                w3Folders = []; w3LedgerItems = []; w3DeletedItems = []; w3ActivityLog = [];
+                setW3Role(null);
+                return;
+            }
+            await loadMyProjects();
+            const project = findMyProject();
+            const role = myProjectRole(project);
+            w3ContractorProfitPercent = project ? parseFloat(project.contractor_profit_percent) || 10 : 10;
+            contractorDirectPaidAmount = project ? parseFloat(project.contractor_direct_paid_amount) || 0 : 0;
+            contractorDirectPaidStatus = project ? project.contractor_direct_paid_status || 'Approved' : 'Approved';
+            contractorDirectPaidPendingValue = project ? parseFloat(project.contractor_direct_paid_pending_val) || 0 : 0;
+            ownerDirectPaidAmount = project ? parseFloat(project.owner_direct_paid_amount) || 0 : 0;
+            ownerDirectPaidStatus = project ? project.owner_direct_paid_status || 'Approved' : 'Approved';
+            ownerDirectPaidPendingValue = project ? parseFloat(project.owner_direct_paid_pending_val) || 0 : 0;
+
+            if (!role) {
+                w3Folders = []; w3LedgerItems = []; w3DeletedItems = []; w3ActivityLog = [];
+                setW3Role(null);
+                return;
+            }
+
+            const [folderRows, itemRows, deletedRows, activityRows] = await Promise.all([
+                apiFetch(`/projects/${currentProjectId}/ledger-folders`),
+                apiFetch(`/projects/${currentProjectId}/ledger-items`),
+                apiFetch(`/projects/${currentProjectId}/ledger-items/deleted`),
+                apiFetch(`/projects/${currentProjectId}/activity`)
+            ]);
+            w3Folders = [{ id: 'all', name: 'General Ledger', hidden: false }, ...folderRows.map(applyApiLedgerFolderShape)];
+            w3LedgerItems = itemRows.map(applyApiLedgerItemShape);
+            w3DeletedItems = deletedRows.map(applyApiLedgerItemShape);
+            // API returns newest-first; keep the local array oldest-first like the rest of the
+            // code already expects (logActivity used to .push() in chronological order).
+            w3ActivityLog = activityRows.map(applyApiActivityShape).reverse();
+            setW3Role(role);
+        }
 
         // Neutralizes user-typed text (item names, supplier names, attachment filenames, etc.) before
         // it's injected via innerHTML, so a name like `<img src=x onerror=...>` renders as inert text.
@@ -2738,16 +2801,9 @@
                 </div>`;
             }).join('');
         }
-        function restoreDeletedItem(id) {
-            const idx = w3DeletedItems.findIndex(i => i.id === id);
-            if (idx === -1) return;
-            const [item] = w3DeletedItems.splice(idx, 1);
-            const folderStillExists = w3Folders.some(f => f.id === item.folderId);
-            if (!folderStillExists) item.folderId = 'all';
-            delete item.deletedAt;
-            w3LedgerItems.push(item);
-            logActivity('Restored deleted entry', `"${item.name}"`);
-            syncStorage();
+        async function restoreDeletedItem(id) {
+            await apiFetch(`/projects/${currentProjectId}/ledger-items/${id}/restore`, { method: 'POST' });
+            await loadLedgerDataFromApi();
             renderRecentlyDeletedList();
             renderW3Ledger();
         }
@@ -2766,24 +2822,13 @@
             localStorage.setItem('w2_explicit_groups', JSON.stringify(explicitGroups));
             localStorage.setItem('w2_collapsed_groups', JSON.stringify(collapsedGroups));
             
-            // Window 3 Core State Storage Sync
-            localStorage.setItem('w3_folders', JSON.stringify(w3Folders));
-            localStorage.setItem('w3_ledger_items', JSON.stringify(w3LedgerItems));
+            // w3_folders / w3_ledger_items / w3_deleted_items / w3_activity_log / w3_current_role /
+            // w3_profit_percent / the direct-paid triplets are all gone — ledger folders/items,
+            // the activity log, and these project-level figures are server-backed now, scoped to
+            // currentProjectId (see loadLedgerDataFromApi). w3SupplierPayments and contractorBooks
+            // stay local for this pass (see the Window 3 migration notes).
             localStorage.setItem('w3_supplier_payments', JSON.stringify(w3SupplierPayments));
-            localStorage.setItem('w3_activity_log', JSON.stringify(w3ActivityLog));
-            localStorage.setItem('w3_deleted_items', JSON.stringify(w3DeletedItems));
-            localStorage.setItem('w3_current_role', w3CurrentRole);
-            localStorage.setItem('w3_profit_percent', w3ContractorProfitPercent.toString());
             localStorage.setItem('w2_saved_projects', JSON.stringify(savedProjects));
-
-            localStorage.setItem('w3_contractor_direct_paid', contractorDirectPaidAmount.toString());
-            localStorage.setItem('w3_contractor_direct_status', contractorDirectPaidStatus);
-            localStorage.setItem('w3_contractor_direct_pending_val', contractorDirectPaidPendingValue.toString());
-
-            localStorage.setItem('w3_owner_direct_paid', ownerDirectPaidAmount.toString());
-            localStorage.setItem('w3_owner_direct_status', ownerDirectPaidStatus);
-            localStorage.setItem('w3_owner_direct_pending_val', ownerDirectPaidPendingValue.toString());
-
             localStorage.setItem('w3_contractor_books', JSON.stringify(contractorBooks));
             localStorage.setItem('w3_cb_section_hidden', contractorBooksSectionHidden.toString());
         }
@@ -2897,27 +2942,27 @@
             checkAuthAndInit();
         });
 
-        // Window 3 Role State Logic Handler
+        // Sets the ACTIVE window-3 role — called only internally now, from
+        // applyLedgerRoleForSelectedProject(), never from a clickable button (see the
+        // read-only "Your role on this project" banner). `role` is null when the current
+        // account isn't the selected project's Contractor or Owner (e.g. no project
+        // selected, or an Engineer/Supplier account) — Window 3 stays non-functional then.
         function setW3Role(role) {
-            w3CurrentRole = role;
-            localStorage.setItem('w3_current_role', role);
-            
-            const btnOwner = document.getElementById('role-btn-owner');
-            const btnContractor = document.getElementById('role-btn-contractor');
+            w3CurrentRole = role || 'Owner';
+
+            const label = document.getElementById('w3-my-role-label');
+            if (label) label.innerText = role || 'not a ledger party on this project';
+
             const editProfitBtn = document.getElementById('w3-edit-profit-btn');
             const contractorBooksSection = document.getElementById('contractor-books-section');
-            
-            if (role === 'Owner') {
-                btnOwner.className = "px-4 py-2 rounded-lg text-xs font-bold transition-all duration-200 bg-emerald-600 text-white shadow flex items-center gap-1.5";
-                btnContractor.className = "px-4 py-2 rounded-lg text-xs font-bold transition-all duration-200 text-slate-400 hover:text-white flex items-center gap-1.5";
-                if(editProfitBtn) editProfitBtn.classList.add('hidden');
-                if(contractorBooksSection) contractorBooksSection.classList.add('hidden');
-            } else {
-                btnContractor.className = "px-4 py-2 rounded-lg text-xs font-bold transition-all duration-200 bg-emerald-600 text-white shadow flex items-center gap-1.5";
-                btnOwner.className = "px-4 py-2 rounded-lg text-xs font-bold transition-all duration-200 text-slate-400 hover:text-white flex items-center gap-1.5";
-                if(editProfitBtn) editProfitBtn.classList.remove('hidden');
-                if(contractorBooksSection) contractorBooksSection.classList.remove('hidden');
+
+            if (role === 'Contractor') {
+                if (editProfitBtn) editProfitBtn.classList.remove('hidden');
+                if (contractorBooksSection) contractorBooksSection.classList.remove('hidden');
                 applyContractorBooksVisibility();
+            } else {
+                if (editProfitBtn) editProfitBtn.classList.add('hidden');
+                if (contractorBooksSection) contractorBooksSection.classList.add('hidden');
             }
             renderW3Ledger();
             evaluateContractorDirectWorkflowUI();
@@ -2929,7 +2974,7 @@
             lucide.createIcons();
         }
 
-        function triggerW3ProfitPercentageEdit() {
+        async function triggerW3ProfitPercentageEdit() {
             if (w3CurrentRole !== 'Contractor') {
                 alert("Only the Contractor can choose or edit the profit percentage rate.");
                 return;
@@ -2939,9 +2984,8 @@
             if(entry !== null) {
                 const parsed = parseFloat(entry);
                 if(!isNaN(parsed) && parsed >= 0) {
-                    logActivity('Changed profit rate', `${currentPercent}% → ${parsed}%`);
-                    w3ContractorProfitPercent = parsed;
-                    syncStorage();
+                    await apiFetch(`/projects/${currentProjectId}/profit-percent`, { method: 'PATCH', body: { percent: parsed } });
+                    await loadLedgerDataFromApi();
                     renderW3Ledger();
                 } else {
                     alert("Please insert a valid positive calculation factor.");
@@ -5810,7 +5854,7 @@
 
         function closeW3FolderModal() { document.getElementById('w3-folder-modal').classList.replace('flex', 'hidden'); }
 
-        function saveW3Folder(e) {
+        async function saveW3Folder(e) {
             e.preventDefault();
             const id = document.getElementById('w3-edit-folder-id').value;
             const name = document.getElementById('w3-folder-name').value.trim();
@@ -5822,40 +5866,32 @@
             }
 
             if (id) {
-                const folder = w3Folders.find(f => f.id === id);
-                if (folder) { folder.name = name; folder.budget = budget; }
+                await apiFetch(`/projects/${currentProjectId}/ledger-folders/${id}`, { method: 'PATCH', body: { name, budget } });
                 if (w3SelectedFolderId === id) {
                     document.getElementById('w3-current-folder-title').innerText = name;
                 }
             } else {
-                const newFolder = { id: 'wf_' + Date.now(), name, budget };
-                w3Folders.push(newFolder);
+                await apiFetch(`/projects/${currentProjectId}/ledger-folders`, { method: 'POST', body: { name, budget } });
             }
 
-            syncStorage();
+            await loadLedgerDataFromApi();
             closeW3FolderModal();
             renderW3Folders();
             renderW3Ledger();
         }
 
-        function deleteW3Folder(e, id) {
+        async function deleteW3Folder(e, id) {
             e.stopPropagation();
             if (id === 'all') return;
             if(confirm("Are you sure you want to delete this category? All items inside will be moved to the General Ledger.")) {
-                w3LedgerItems.forEach(item => {
-                    if(item.folderId === id) {
-                        item.folderId = 'all';
-                    }
-                });
-                
-                w3Folders = w3Folders.filter(f => f.id !== id);
-                
+                await apiFetch(`/projects/${currentProjectId}/ledger-folders/${id}`, { method: 'DELETE' });
+
                 if (w3SelectedFolderId === id) {
                     w3SelectedFolderId = 'all';
                     document.getElementById('w3-current-folder-title').innerText = 'General Ledger';
                 }
-                
-                syncStorage();
+
+                await loadLedgerDataFromApi();
                 renderW3Folders();
                 renderW3Ledger();
             }
@@ -5882,18 +5918,14 @@
             document.getElementById('w3-move-modal').classList.replace('flex', 'hidden');
         }
 
-        function saveMoveMaterial(e) {
+        async function saveMoveMaterial(e) {
             e.preventDefault();
             const itemId = document.getElementById('w3-move-item-id').value;
             const newFolderId = document.getElementById('w3-move-folder-select').value;
             const item = w3LedgerItems.find(i => i.id === itemId);
             if (item) {
-                item.status = 'Pending Move';
-                item.pendingAction = 'move';
-                item.pendingData = { folderId: newFolderId };
-                item.requester = w3CurrentRole;
-                logActivity('Proposed move', `"${item.name}" — awaiting the other party's approval`);
-                syncStorage();
+                await apiFetch(`/projects/${currentProjectId}/ledger-items/${itemId}/move`, { method: 'POST', body: { folderId: newFolderId } });
+                await loadLedgerDataFromApi();
                 renderW3Ledger();
                 updatePendingApprovalsBadge();
             }
@@ -5947,38 +5979,24 @@
             document.getElementById('bought-choice-modal').classList.replace('flex', 'hidden');
         }
 
-        function confirmMarkBought(method) {
+        async function confirmMarkBought(method) {
             if (!pendingBoughtItemId) return;
             const item = w3LedgerItems.find(i => i.id === pendingBoughtItemId);
             if (item && (!item.boughtStatus || item.boughtStatus === 'Not Bought')) {
-                item.boughtStatus = 'Pending Bought';
-                item.boughtRequestedBy = w3CurrentRole;
-                item.boughtMethod = method;
-                logActivity('Marked bought', `"${item.name}" as ${method} — awaiting approval`);
-                syncStorage();
+                await apiFetch(`/projects/${currentProjectId}/ledger-items/${pendingBoughtItemId}/mark-bought`, { method: 'POST', body: { method } });
+                await loadLedgerDataFromApi();
             }
             closeBoughtChoiceModal();
             renderW3Ledger();
             updatePendingApprovalsBadge();
         }
 
-        function resolveBoughtAction(id, isApproved) {
+        async function resolveBoughtAction(id, isApproved) {
             const item = w3LedgerItems.find(i => i.id === id);
             if (!item || item.boughtStatus !== 'Pending Bought') return;
-            if (isApproved) {
-                item.boughtStatus = 'Bought';
-                item.boughtBy = item.boughtRequestedBy;
-                item.paymentStatus = item.boughtMethod === 'Cash' ? 'Paid in Cash' : 'Debt';
-                item.actualPayer = item.boughtRequestedBy;
-                item.payer = item.boughtRequestedBy;
-                logActivity('Approved bought', `"${item.name}" (${item.paymentStatus})`);
-            } else {
-                item.boughtStatus = 'Not Bought';
-                item.boughtMethod = null;
-                logActivity('Rejected bought', `"${item.name}"`);
-            }
-            item.boughtRequestedBy = null;
-            syncStorage(); renderW3Ledger(); updatePendingApprovalsBadge();
+            await apiFetch(`/projects/${currentProjectId}/ledger-items/${id}/resolve-bought`, { method: 'POST', body: { approved: isApproved } });
+            await loadLedgerDataFromApi();
+            renderW3Ledger(); updatePendingApprovalsBadge();
             if (!document.getElementById('pending-approvals-modal').classList.contains('hidden')) renderPendingApprovalsList();
         }
 
@@ -6542,63 +6560,17 @@
         }
 
         // ================= MUTUAL APPROVAL LOGIC FOR LEDGER ITEMS =================
-        function requestDeleteItem(id) {
-            let item = w3LedgerItems.find(i => i.id === id);
-            if (item) {
-                item.status = 'Pending Deletion';
-                item.pendingAction = 'delete';
-                item.requester = w3CurrentRole;
-                syncStorage(); renderW3Ledger(); updatePendingApprovalsBadge();
-            }
+        async function requestDeleteItem(id) {
+            await apiFetch(`/projects/${currentProjectId}/ledger-items/${id}/request-delete`, { method: 'POST' });
+            await loadLedgerDataFromApi();
+            renderW3Ledger(); updatePendingApprovalsBadge();
         }
 
-        function resolveItemAction(id, isApproved) {
-            let itemIndex = w3LedgerItems.findIndex(i => i.id === id);
-            if (itemIndex > -1) {
-                let item = w3LedgerItems[itemIndex];
-                const action = item.pendingAction, name = item.name;
-                if (isApproved) {
-                    if (item.pendingAction === 'delete') {
-                        const removed = JSON.parse(JSON.stringify(item));
-                        removed.status = 'Approved';
-                        delete removed.pendingAction;
-                        delete removed.requester;
-                        removed.deletedAt = Date.now();
-                        w3DeletedItems.push(removed);
-                        if (w3DeletedItems.length > 20) w3DeletedItems = w3DeletedItems.slice(-20);
-                        w3LedgerItems.splice(itemIndex, 1);
-                    } else if (item.pendingAction === 'create') {
-                        item.status = 'Approved';
-                        delete item.pendingAction;
-                        delete item.requester;
-                    } else if (item.pendingAction === 'edit') {
-                        Object.assign(item, item.pendingData);
-                        item.status = 'Approved';
-                        delete item.pendingAction;
-                        delete item.pendingData;
-                        delete item.requester;
-                    } else if (item.pendingAction === 'move') {
-                        item.folderId = item.pendingData.folderId;
-                        item.status = 'Approved';
-                        delete item.pendingAction;
-                        delete item.pendingData;
-                        delete item.requester;
-                    }
-                    logActivity(`Approved ${action}`, `"${name}"`);
-                } else {
-                    if (item.pendingAction === 'create') {
-                        w3LedgerItems.splice(itemIndex, 1);
-                    } else {
-                        item.status = 'Approved';
-                        delete item.pendingAction;
-                        delete item.pendingData;
-                        delete item.requester;
-                    }
-                    logActivity(`Rejected ${action}`, `"${name}"`);
-                }
-                syncStorage(); renderW3Ledger(); updatePendingApprovalsBadge();
-                if (!document.getElementById('pending-approvals-modal').classList.contains('hidden')) renderPendingApprovalsList();
-            }
+        async function resolveItemAction(id, isApproved) {
+            await apiFetch(`/projects/${currentProjectId}/ledger-items/${id}/resolve`, { method: 'POST', body: { approved: isApproved } });
+            await loadLedgerDataFromApi();
+            renderW3Ledger(); updatePendingApprovalsBadge();
+            if (!document.getElementById('pending-approvals-modal').classList.contains('hidden')) renderPendingApprovalsList();
         }
 
         // ================= PENDING APPROVALS INBOX — a global, folder-independent view of every
@@ -6841,7 +6813,7 @@
 
         function closeLedgerItemModal() { document.getElementById('w3-ledger-modal').classList.replace('flex', 'hidden'); }
 
-        function saveLedgerItem(e) {
+        async function saveLedgerItem(e) {
             e.preventDefault();
             const rawPrice = parseFloat(document.getElementById('w3-item-price').value);
             const rawQty = parseFloat(document.getElementById('w3-item-qty').value);
@@ -6870,27 +6842,12 @@
             }
 
             if (editId) {
-                let item = w3LedgerItems.find(i => i.id === editId);
-                if (item) {
-                    item.pendingData = itemData;
-                    item.status = 'Pending Edit';
-                    item.pendingAction = 'edit';
-                    item.requester = w3CurrentRole;
-                    logActivity('Proposed edit', `"${item.name}" — awaiting the other party's approval`);
-                }
+                await apiFetch(`/projects/${currentProjectId}/ledger-items/${editId}`, { method: 'PATCH', body: itemData });
             } else {
-                w3LedgerItems.push({
-                    id: 'w3i_' + Date.now(),
-                    createdAt: Date.now(),
-                    ...itemData,
-                    creator: w3CurrentRole,
-                    status: 'Pending Creation',
-                    pendingAction: 'create',
-                    requester: w3CurrentRole
-                });
-                logActivity('Logged new entry', `"${itemData.name}" from ${itemData.supplier || 'unknown supplier'} — $${(parseFloat(itemData.price||0)*parseFloat(itemData.quantity||0)).toFixed(2)}`);
+                await apiFetch(`/projects/${currentProjectId}/ledger-items`, { method: 'POST', body: itemData });
             }
-            syncStorage(); closeLedgerItemModal(); renderW3Ledger(); updatePendingApprovalsBadge();
+            await loadLedgerDataFromApi();
+            closeLedgerItemModal(); renderW3Ledger(); updatePendingApprovalsBadge();
         }
 
         // ================= RECIPROCAL INTER-PARTY DIRECT STATUS CONTROL MATRIX RENDERERS =================
@@ -6975,46 +6932,44 @@
         }
 
         // ================= CONTROL MATRIX HANDLERS =================
-        function triggerContractorOverridePrompt() {
+        async function triggerContractorOverridePrompt() {
             if(w3CurrentRole !== 'Contractor') return;
             const inputVal = prompt("Enter the exact amount paid for Owner items ($):", contractorDirectPaidAmount);
             if (inputVal !== null) {
                 const parsed = parseFloat(inputVal);
                 if (!isNaN(parsed) && parsed >= 0) {
-                    contractorDirectPaidPendingValue = parsed;
-                    contractorDirectPaidStatus = 'Pending Approval';
-                    syncStorage(); renderW3Ledger();
+                    await apiFetch(`/projects/${currentProjectId}/direct-paid`, { method: 'POST', body: { side: 'contractor', pendingValue: parsed } });
+                    await loadLedgerDataFromApi();
+                    renderW3Ledger();
                 } else alert("Invalid monetary input.");
             }
         }
 
-        function triggerOwnerOverridePrompt() {
+        async function triggerOwnerOverridePrompt() {
             if(w3CurrentRole !== 'Owner') return;
             const inputVal = prompt("Enter the exact adjustment amount Owner paid for Contractor items ($):", ownerDirectPaidAmount);
             if (inputVal !== null) {
                 const parsed = parseFloat(inputVal);
                 if (!isNaN(parsed) && parsed >= 0) {
-                    ownerDirectPaidPendingValue = parsed;
-                    ownerDirectPaidStatus = 'Pending Approval';
-                    syncStorage(); renderW3Ledger();
+                    await apiFetch(`/projects/${currentProjectId}/direct-paid`, { method: 'POST', body: { side: 'owner', pendingValue: parsed } });
+                    await loadLedgerDataFromApi();
+                    renderW3Ledger();
                 } else alert("Invalid monetary input.");
             }
         }
 
-        function processOwnerWorkflowAction(isApproved) {
+        async function processOwnerWorkflowAction(isApproved) {
             if(w3CurrentRole !== 'Owner') return;
-            if (isApproved) contractorDirectPaidAmount = contractorDirectPaidPendingValue;
-            contractorDirectPaidStatus = 'Approved';
-            contractorDirectPaidPendingValue = 0;
-            syncStorage(); renderW3Ledger();
+            await apiFetch(`/projects/${currentProjectId}/direct-paid/resolve`, { method: 'POST', body: { side: 'contractor', approved: isApproved } });
+            await loadLedgerDataFromApi();
+            renderW3Ledger();
         }
 
-        function processContractorWorkflowAction(isApproved) {
+        async function processContractorWorkflowAction(isApproved) {
             if(w3CurrentRole !== 'Contractor') return;
-            if (isApproved) ownerDirectPaidAmount = ownerDirectPaidPendingValue;
-            ownerDirectPaidStatus = 'Approved';
-            ownerDirectPaidPendingValue = 0;
-            syncStorage(); renderW3Ledger();
+            await apiFetch(`/projects/${currentProjectId}/direct-paid/resolve`, { method: 'POST', body: { side: 'owner', approved: isApproved } });
+            await loadLedgerDataFromApi();
+            renderW3Ledger();
         }
     </script>
 
