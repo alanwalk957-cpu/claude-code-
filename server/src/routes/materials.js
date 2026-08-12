@@ -6,14 +6,23 @@ const { asyncHandler } = require('../utils/asyncHandler');
 
 const router = express.Router();
 
+// Joins in the creator's display info so the frontend can render "By: <name>"
+// without a second round-trip — mirrors what the app used to show from a
+// purely local `creator` string, now backed by the real account.
+const SELECT_WITH_CREATOR = `
+  SELECT materials.*, users.email AS creator_email, users.company_name AS creator_company
+  FROM materials
+  LEFT JOIN users ON users.id = materials.creator_id
+`;
+
 // Any authenticated account (any role) can browse the global catalog.
 router.get('/', requireAuth, asyncHandler(async (req, res) => {
-  const { rows } = await pool.query('SELECT * FROM materials ORDER BY created_at DESC');
+  const { rows } = await pool.query(`${SELECT_WITH_CREATOR} ORDER BY materials.created_at DESC`);
   res.json(rows);
 }));
 
 router.get('/:id', requireAuth, asyncHandler(async (req, res) => {
-  const { rows } = await pool.query('SELECT * FROM materials WHERE id = $1', [req.params.id]);
+  const { rows } = await pool.query(`${SELECT_WITH_CREATOR} WHERE materials.id = $1`, [req.params.id]);
   if (rows.length === 0) return res.status(404).json({ error: 'Material not found' });
   res.json(rows[0]);
 }));
@@ -23,7 +32,7 @@ router.post('/', requireAuth, requireRole('supplier'), asyncHandler(async (req, 
   const {
     folderId, name, code, price, unitType, dimUnit, perUnit,
     length, width, height, weight, measureBy, bulkDensity, concreteRole,
-    description, images
+    description, images, calc
   } = req.body || {};
 
   if (!name) return res.status(400).json({ error: 'name is required' });
@@ -32,14 +41,15 @@ router.post('/', requireAuth, requireRole('supplier'), asyncHandler(async (req, 
     `INSERT INTO materials
       (folder_id, name, code, price, unit_type, dim_unit, per_unit,
        length, width, height, weight, measure_by, bulk_density, concrete_role,
-       description, images, creator_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
-     RETURNING *`,
+       description, images, calc, creator_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+     RETURNING id`,
     [folderId || null, name, code || null, price || null, unitType || null, dimUnit || null, perUnit || null,
      length || null, width || null, height || null, weight || null, measureBy || null, bulkDensity || null, concreteRole || null,
-     description || null, JSON.stringify(images || []), req.user.id]
+     description || null, JSON.stringify(images || []), calc ? JSON.stringify(calc) : null, req.user.id]
   );
-  res.status(201).json(rows[0]);
+  const { rows: fullRows } = await pool.query(`${SELECT_WITH_CREATOR} WHERE materials.id = $1`, [rows[0].id]);
+  res.status(201).json(fullRows[0]);
 }));
 
 router.patch('/:id', requireAuth, requireRole('supplier'), asyncHandler(async (req, res) => {
@@ -53,29 +63,31 @@ router.patch('/:id', requireAuth, requireRole('supplier'), asyncHandler(async (r
   const fields = [
     'folderId', 'name', 'code', 'price', 'unitType', 'dimUnit', 'perUnit',
     'length', 'width', 'height', 'weight', 'measureBy', 'bulkDensity', 'concreteRole',
-    'description', 'images'
+    'description', 'images', 'calc'
   ];
   const columnFor = {
     folderId: 'folder_id', unitType: 'unit_type', dimUnit: 'dim_unit', perUnit: 'per_unit',
     measureBy: 'measure_by', bulkDensity: 'bulk_density', concreteRole: 'concrete_role'
   };
+  const jsonFields = new Set(['images', 'calc']);
 
   const updates = [];
   const values = [];
   fields.forEach((field) => {
     if (Object.prototype.hasOwnProperty.call(req.body || {}, field)) {
       const column = columnFor[field] || field;
-      values.push(field === 'images' ? JSON.stringify(req.body[field]) : req.body[field]);
+      values.push(jsonFields.has(field) ? JSON.stringify(req.body[field]) : req.body[field]);
       updates.push(`${column} = $${values.length}`);
     }
   });
-  if (updates.length === 0) return res.json(existing);
+  if (updates.length === 0) {
+    const { rows } = await pool.query(`${SELECT_WITH_CREATOR} WHERE materials.id = $1`, [req.params.id]);
+    return res.json(rows[0]);
+  }
 
   values.push(req.params.id);
-  const { rows } = await pool.query(
-    `UPDATE materials SET ${updates.join(', ')} WHERE id = $${values.length} RETURNING *`,
-    values
-  );
+  await pool.query(`UPDATE materials SET ${updates.join(', ')} WHERE id = $${values.length}`, values);
+  const { rows } = await pool.query(`${SELECT_WITH_CREATOR} WHERE materials.id = $1`, [req.params.id]);
   res.json(rows[0]);
 }));
 

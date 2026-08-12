@@ -400,7 +400,55 @@
         #blueprint-embed-root .dpad-btn.center:hover { background: #4b5563; }
     </style>
 </head>
-<body class="bg-slate-950 text-slate-100 font-sans min-h-screen flex flex-col antialiased selection:bg-blue-500 selection:text-white">
+<body class="auth-pending bg-slate-950 text-slate-100 font-sans min-h-screen flex flex-col antialiased selection:bg-blue-500 selection:text-white">
+    <style>
+        /* Hides the whole app until checkAuthAndInit() confirms a session — every window now
+           depends on a real logged-in account, so nothing should render before that resolves. */
+        body.auth-pending > header, body.auth-pending > div[id^="window-"] { display: none !important; }
+    </style>
+
+    <!-- AUTH GATE — shown until checkAuthAndInit() confirms a logged-in session; hides the whole
+         app (header + all 4 windows) until then, since every window now depends on a real account. -->
+    <div id="auth-view" class="hidden fixed inset-0 z-50 bg-slate-950 flex items-center justify-center p-4">
+        <div class="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl">
+            <div class="flex items-center gap-3 mb-6">
+                <div class="bg-gradient-to-br from-blue-500 to-indigo-600 text-white w-9 h-9 flex items-center justify-center rounded-xl font-black text-sm shadow-md">MX</div>
+                <h1 class="text-sm font-black tracking-wider text-white uppercase">Material Matrix Pro</h1>
+            </div>
+
+            <div class="flex bg-slate-950 p-1 rounded-xl border border-slate-800 mb-5">
+                <button type="button" id="auth-tab-login" onclick="setAuthMode('login')" class="flex-1 px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wide transition-all">Log in</button>
+                <button type="button" id="auth-tab-signup" onclick="setAuthMode('signup')" class="flex-1 px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wide transition-all">Sign up</button>
+            </div>
+
+            <p id="auth-error" class="hidden text-xs text-rose-400 bg-rose-950/30 border border-rose-900/50 rounded-lg px-3 py-2 mb-4"></p>
+
+            <form id="auth-form" onsubmit="submitAuthForm(event)" class="space-y-3">
+                <div id="auth-role-field" class="hidden">
+                    <label class="block text-[11px] font-medium text-slate-400 mb-1">Account type</label>
+                    <select id="auth-role" class="w-full bg-slate-950 border border-slate-700 text-white rounded-xl px-4 py-2.5 text-xs focus:outline-none focus:border-blue-500">
+                        <option value="supplier">Supplier — posts materials into the catalog</option>
+                        <option value="engineer">Engineer — cost/quantity takeoff</option>
+                        <option value="contractor">Contractor</option>
+                        <option value="owner">Owner</option>
+                    </select>
+                </div>
+                <div id="auth-company-field" class="hidden">
+                    <label class="block text-[11px] font-medium text-slate-400 mb-1">Company / display name</label>
+                    <input type="text" id="auth-company" placeholder="e.g., Apex Structural Supplies Ltd." class="w-full bg-slate-950 border border-slate-700 text-white rounded-xl px-4 py-2.5 text-xs focus:outline-none focus:border-blue-500">
+                </div>
+                <div>
+                    <label class="block text-[11px] font-medium text-slate-400 mb-1">Email</label>
+                    <input type="email" id="auth-email" required class="w-full bg-slate-950 border border-slate-700 text-white rounded-xl px-4 py-2.5 text-xs focus:outline-none focus:border-blue-500">
+                </div>
+                <div>
+                    <label class="block text-[11px] font-medium text-slate-400 mb-1">Password</label>
+                    <input type="password" id="auth-password" required minlength="6" class="w-full bg-slate-950 border border-slate-700 text-white rounded-xl px-4 py-2.5 text-xs focus:outline-none focus:border-blue-500">
+                </div>
+                <button type="submit" id="auth-submit-btn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold px-4 py-2.5 rounded-xl text-xs transition-all shadow-lg">Log in</button>
+            </form>
+        </div>
+    </div>
 
     <header class="bg-slate-900 border-b border-slate-800/80 px-4 sm:px-6 py-3.5 flex flex-col sm:flex-row justify-between items-center gap-4 sticky top-0 z-40 backdrop-blur-md bg-slate-900/90">
         <div class="flex items-center space-x-4 w-full sm:w-auto">
@@ -431,9 +479,12 @@
             </button>
         </div>
 
-        <div onclick="openProfileModal()" class="flex items-center space-x-3 bg-slate-950/60 px-3.5 py-2 rounded-xl border border-slate-800/80 cursor-pointer hover:bg-slate-800/50 hover:border-slate-700/80 transition-all duration-200 hidden sm:flex">
-            <div id="nav-avatar" class="w-7 h-7 rounded-lg bg-gradient-to-tr from-blue-500 to-indigo-400 text-white flex items-center justify-center font-bold text-xs shadow-sm">JS</div>
-            <span id="nav-user-name" class="text-xs font-semibold text-slate-300 tracking-wide">John Smith</span>
+        <div class="flex items-center gap-2">
+            <div onclick="openProfileModal()" class="flex items-center space-x-3 bg-slate-950/60 px-3.5 py-2 rounded-xl border border-slate-800/80 cursor-pointer hover:bg-slate-800/50 hover:border-slate-700/80 transition-all duration-200 hidden sm:flex">
+                <div id="nav-avatar" class="w-7 h-7 rounded-lg bg-gradient-to-tr from-blue-500 to-indigo-400 text-white flex items-center justify-center font-bold text-xs shadow-sm">JS</div>
+                <span id="nav-user-name" class="text-xs font-semibold text-slate-300 tracking-wide">John Smith</span>
+            </div>
+            <button onclick="logout()" class="text-xs font-semibold text-slate-400 hover:text-white border border-slate-800/80 rounded-xl px-3 py-2 bg-slate-950/60 hover:bg-slate-800/50 transition-all">Log out</button>
         </div>
     </header>
 
@@ -496,7 +547,7 @@
                             <i data-lucide="search" class="w-4 h-4 absolute left-3.5 top-3 text-slate-500"></i>
                             <input type="text" id="search-input" oninput="renderMaterials()" placeholder="Search materials..." class="w-full bg-slate-950 border border-slate-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-white rounded-xl pl-10 pr-4 py-2.5 text-xs focus:outline-none transition-all">
                         </div>
-                        <button onclick="openMaterialModal('add')" class="bg-blue-600 hover:bg-blue-700 text-white font-bold px-4 py-2.5 rounded-xl text-xs flex items-center justify-center gap-2 shadow-lg transition-all">
+                        <button id="btn-add-material" onclick="openMaterialModal('add')" class="hidden bg-blue-600 hover:bg-blue-700 text-white font-bold px-4 py-2.5 rounded-xl text-xs flex items-center justify-center gap-2 shadow-lg transition-all">
                             <i data-lucide="plus" class="w-4 h-4"></i> Add material
                         </button>
                     </div>
@@ -1753,7 +1804,7 @@
 
                     <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
                         <div><label class="block text-[11px] font-medium text-slate-400 mb-1">SKU / code</label><input type="text" id="mat-code" placeholder="e.g., TLE-404" class="w-full bg-slate-900 border border-slate-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-white font-medium placeholder-slate-500 rounded-xl px-4 py-2.5 text-xs focus:outline-none"></div>
-                        <div><label class="block text-[11px] font-medium text-slate-400 mb-1">Supplier / Creator</label><input type="text" id="mat-supplier" placeholder="e.g., John Smith" class="w-full bg-slate-900 border border-slate-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-white font-medium placeholder-slate-500 rounded-xl px-4 py-2.5 text-xs focus:outline-none"></div>
+                        <div><label class="block text-[11px] font-medium text-slate-400 mb-1">Posted by</label><input type="text" id="mat-supplier" readonly class="w-full bg-slate-900/50 border border-slate-800 text-slate-400 font-medium rounded-xl px-4 py-2.5 text-xs focus:outline-none cursor-not-allowed"></div>
                         <div><label class="block text-[11px] font-medium text-slate-400 mb-1">Folder Assignment</label><select id="mat-folder" onchange="onMatFolderDropdownChange()" class="w-full bg-slate-900 border border-slate-700 text-white font-medium rounded-xl px-4 py-2.5 text-xs focus:outline-none"></select></div>
                     </div>
 
@@ -2286,9 +2337,89 @@
         let contractorBooks = JSON.parse(localStorage.getItem('w3_contractor_books')) || [];
         let contractorBooksSectionHidden = localStorage.getItem('w3_cb_section_hidden') === 'true';
 
-        let globalSupplierProfile = JSON.parse(localStorage.getItem('bm_supplier_profile')) || {
-            name: "John Smith", companyName: "Apex Structural Supplies Ltd."
-        };
+        // Real account, fetched from the backend after login (see checkAuthAndInit) —
+        // replaces the old cosmetic-only `globalSupplierProfile` localStorage object.
+        let currentUser = null;
+        const API_BASE = window.MMP_API_BASE || 'http://localhost:4000/api';
+
+        async function apiFetch(path, options = {}) {
+            const res = await fetch(API_BASE + path, {
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                ...options,
+                body: options.body ? JSON.stringify(options.body) : undefined
+            });
+            if (res.status === 204) return null;
+            const data = await res.json().catch(() => null);
+            if (!res.ok) throw new Error((data && data.error) || `Request failed (${res.status})`);
+            return data;
+        }
+
+        let authMode = 'login';
+        function setAuthMode(mode) {
+            authMode = mode;
+            document.getElementById('auth-tab-login').className = 'flex-1 px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wide transition-all ' + (mode === 'login' ? 'bg-blue-600 text-white shadow' : 'text-slate-400 hover:text-white');
+            document.getElementById('auth-tab-signup').className = 'flex-1 px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wide transition-all ' + (mode === 'signup' ? 'bg-blue-600 text-white shadow' : 'text-slate-400 hover:text-white');
+            document.getElementById('auth-role-field').classList.toggle('hidden', mode !== 'signup');
+            document.getElementById('auth-company-field').classList.toggle('hidden', mode !== 'signup');
+            document.getElementById('auth-submit-btn').innerText = mode === 'signup' ? 'Create account' : 'Log in';
+            document.getElementById('auth-error').classList.add('hidden');
+        }
+
+        async function submitAuthForm(event) {
+            event.preventDefault();
+            const errorEl = document.getElementById('auth-error');
+            errorEl.classList.add('hidden');
+            const email = document.getElementById('auth-email').value.trim();
+            const password = document.getElementById('auth-password').value;
+            try {
+                if (authMode === 'signup') {
+                    const role = document.getElementById('auth-role').value;
+                    const companyName = document.getElementById('auth-company').value.trim();
+                    currentUser = await apiFetch('/auth/signup', { method: 'POST', body: { email, password, role, companyName } });
+                } else {
+                    currentUser = await apiFetch('/auth/login', { method: 'POST', body: { email, password } });
+                }
+                await startAppAfterAuth();
+            } catch (err) {
+                errorEl.innerText = err.message;
+                errorEl.classList.remove('hidden');
+            }
+        }
+
+        // Runs once at page load: shows the login/signup gate if there's no valid session cookie,
+        // otherwise skips straight to the app. Every window depends on `currentUser` being set and
+        // `materials` being fetched before it renders, so this has to resolve before anything else.
+        async function checkAuthAndInit() {
+            try {
+                currentUser = await apiFetch('/auth/me');
+                await startAppAfterAuth();
+            } catch (err) {
+                setAuthMode('login');
+                document.getElementById('auth-view').classList.replace('hidden', 'flex');
+            }
+        }
+
+        async function startAppAfterAuth() {
+            document.getElementById('auth-view').classList.replace('flex', 'hidden');
+            document.body.classList.remove('auth-pending');
+            await loadMaterialsFromApi();
+            applyRoleVisibility();
+            initAppUI();
+        }
+
+        // Only a Supplier account can post/edit/delete materials — enforced server-side already
+        // (requireRole('supplier') in server/src/routes/materials.js), this just keeps the controls
+        // an unauthorized account can't use out of the UI in the first place.
+        function applyRoleVisibility() {
+            const isSupplier = currentUser && currentUser.role === 'supplier';
+            const addBtn = document.getElementById('btn-add-material');
+            if (addBtn) addBtn.classList.toggle('hidden', !isSupplier);
+        }
+
+        function canEditMaterial(mat) {
+            return !!(currentUser && currentUser.role === 'supplier' && mat.creatorId === currentUser.id);
+        }
 
         // Fixed trade-category folders exist in every install and can't be renamed or deleted —
         // unlike the free-form custom folders below, which stay fully user-editable and coexist
@@ -2323,16 +2454,34 @@
             folders = [allFolder, ...fixed, ...custom];
         })();
 
-        let materials = JSON.parse(localStorage.getItem('bm_materials')) || [
-            {
-                id: 'm1', folderId: 'all', name: 'Premium Ceramic Tile', code: 'TILE-901',
-                length: '0.6', width: '0.6', height: '0.01', weight: '2.4', price: 14.50,
-                unitType: 'Pieces / Units', dimUnit: 'm', perUnit: true,
-                description: 'High durability stone finish designed for area space units.',
-                images: ['https://images.unsplash.com/photo-1501183007986-d0d080b147f9?auto=format&fit=crop&w=400&q=80'],
-                creator: 'John Smith'
-            }
-        ];
+        // Populated from the backend catalog API (loadMaterialsFromApi) instead of localStorage —
+        // Window 1's global, shared source of truth now lives server-side.
+        let materials = [];
+
+        function applyApiMaterialShape(row) {
+            // Maps the API row onto the same field names the rest of Window 1's code already
+            // expects (mat.creator, mat.folderId, ...) so render/read call sites don't change.
+            return {
+                ...row,
+                id: String(row.id),
+                folderId: row.folder_id,
+                unitType: row.unit_type,
+                dimUnit: row.dim_unit,
+                perUnit: row.per_unit === 'true' || row.per_unit === true,
+                measureBy: row.measure_by,
+                bulkDensity: row.bulk_density != null ? parseFloat(row.bulk_density) : null,
+                concreteRole: row.concrete_role,
+                price: row.price != null ? parseFloat(row.price) : 0,
+                length: row.length, width: row.width, height: row.height, weight: row.weight,
+                creator: row.creator_company || row.creator_email || 'Unknown supplier',
+                creatorId: row.creator_id
+            };
+        }
+
+        async function loadMaterialsFromApi() {
+            const rows = await apiFetch('/materials');
+            materials = rows.map(applyApiMaterialShape);
+        }
 
         let blueprintRooms = JSON.parse(localStorage.getItem('w2_blueprint_rooms')) || [
             { id: 'r1', name: 'Bath room', length: 2.0, width: 1.0, height: 3.0, group: 'Apartment A' }
@@ -2472,9 +2621,10 @@
         let savedProjects = JSON.parse(localStorage.getItem('w2_saved_projects')) || {};
 
         function syncStorage() {
+            // bm_materials / bm_supplier_profile are gone — materials live in the backend now
+            // (see loadMaterialsFromApi/saveMaterial) and currentUser replaces the supplier profile.
+            // Folders stay local for this pass (see loadMaterialsFromApi's comment for why).
             localStorage.setItem('bm_folders', JSON.stringify(folders));
-            localStorage.setItem('bm_materials', JSON.stringify(materials));
-            localStorage.setItem('bm_supplier_profile', JSON.stringify(globalSupplierProfile));
             localStorage.setItem('w2_blueprint_rooms', JSON.stringify(blueprintRooms));
             localStorage.setItem('w2_project_concrete_mix', JSON.stringify(projectConcreteMix));
             localStorage.setItem('w2_mapped_materials', JSON.stringify(mappedRoomMaterials));
@@ -2558,14 +2708,16 @@
             alert("Materials successfully dealt!");
         }
 
-        window.addEventListener('DOMContentLoaded', () => {
+        // Runs once checkAuthAndInit() confirms a real session and materials have been fetched —
+        // everything that used to run unconditionally at DOMContentLoaded now waits for that.
+        function initAppUI() {
             updateGlobalHeaderProfileUI();
             renderFolders();
             renderMaterials();
             renderRoomsList();
             updateActionBar();
             updateProjectSelectorDropdownUI();
-            
+
             // Initialize Window 3 UI Ecosystem
             setW3Role(w3CurrentRole);
             renderW3Folders();
@@ -2604,6 +2756,10 @@
             });
 
             lucide.createIcons();
+        }
+
+        window.addEventListener('DOMContentLoaded', () => {
+            checkAuthAndInit();
         });
 
         // Window 3 Role State Logic Handler
@@ -2709,18 +2865,23 @@
             }
         }
 
+        function displayNameFor(user) {
+            return (user && (user.companyName || user.email)) || 'User';
+        }
+
         function updateGlobalHeaderProfileUI() {
-            document.getElementById('nav-user-name').innerText = globalSupplierProfile.name || "User";
-            document.getElementById('nav-avatar').innerText = (globalSupplierProfile.name || "JS").substring(0,2).toUpperCase();
+            const label = displayNameFor(currentUser);
+            document.getElementById('nav-user-name').innerText = label;
+            document.getElementById('nav-avatar').innerText = label.substring(0, 2).toUpperCase();
         }
 
         function openProfileModal() {
             isProfileEditMode = false;
             document.getElementById('profile-view-container').classList.remove('hidden');
             document.getElementById('profile-edit-form').classList.add('hidden');
-            document.getElementById('profile-user-name').innerText = globalSupplierProfile.name;
-            document.getElementById('profile-company-name').innerText = globalSupplierProfile.companyName;
-            document.getElementById('edit-prof-name').value = globalSupplierProfile.name;
+            document.getElementById('profile-user-name').innerText = currentUser.email;
+            document.getElementById('profile-company-name').innerText = currentUser.companyName || '(no company name set)';
+            document.getElementById('edit-prof-name').value = currentUser.companyName || '';
             document.getElementById('profile-modal').classList.replace('hidden', 'flex');
         }
         function closeProfileModal() { document.getElementById('profile-modal').classList.replace('flex', 'hidden'); }
@@ -3769,8 +3930,10 @@
                                         <div class="flex justify-between items-start gap-1">
                                             <h4 class="font-bold text-white text-xs truncate leading-tight">${mat.name || 'Unnamed'}</h4>
                                             <div class="flex items-center gap-1 flex-shrink-0">
+                                                ${canEditMaterial(mat) ? `
                                                 <button onclick="openMaterialModal('edit', '${mat.id}')" class="bg-slate-900 border border-slate-800 p-1 rounded text-slate-400 hover:text-white transition"><i data-lucide="edit-3" class="w-3 h-3"></i></button>
                                                 <button onclick="deleteMaterial('${mat.id}')" class="bg-slate-900 border border-slate-800 p-1 rounded text-slate-400 hover:text-rose-400 transition"><i data-lucide="trash-2" class="w-3 h-3"></i></button>
+                                                ` : ''}
                                             </div>
                                         </div>
                                         <div class="flex items-center gap-1 flex-wrap">
@@ -3805,8 +3968,10 @@
                                                 </div>
                                             </div>
                                             <div class="flex items-center gap-1.5">
+                                                ${canEditMaterial(mat) ? `
                                                 <button onclick="openMaterialModal('edit', '${mat.id}')" class="bg-slate-900 border border-slate-800 p-2 rounded-xl text-slate-400 hover:text-white transition"><i data-lucide="edit-3" class="w-3.5 h-3.5"></i></button>
                                                 <button onclick="deleteMaterial('${mat.id}')" class="bg-slate-900 border border-slate-800 p-2 rounded-xl text-slate-400 hover:text-rose-400 transition"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>
+                                                ` : ''}
                                             </div>
                                         </div>
                                         <div class="bg-slate-900/60 border border-slate-900 rounded-xl p-3 text-xs grid grid-cols-2 gap-2">
@@ -3841,8 +4006,10 @@
                                 <div class="flex items-center gap-3 flex-shrink-0">
                                     <span class="text-blue-400 font-black text-sm">$${parseFloat(mat.price || 0).toFixed(2)}</span>
                                     <div class="flex items-center gap-1">
+                                        ${canEditMaterial(mat) ? `
                                         <button onclick="openMaterialModal('edit', '${mat.id}')" class="bg-slate-900 border border-slate-800 p-1.5 rounded text-slate-400 hover:text-white transition"><i data-lucide="edit-3" class="w-3 h-3"></i></button>
                                         <button onclick="deleteMaterial('${mat.id}')" class="bg-slate-900 border border-slate-800 p-1.5 rounded text-slate-400 hover:text-rose-400 transition"><i data-lucide="trash-2" class="w-3 h-3"></i></button>
+                                        ` : ''}
                                     </div>
                                 </div>
                             </div>`;
@@ -3876,8 +4043,10 @@
                                         <span class="text-[10px] text-slate-500 uppercase font-bold">per unit node</span>
                                     </div>
                                     <div class="flex items-center gap-1.5">
+                                        ${canEditMaterial(mat) ? `
                                         <button onclick="openMaterialModal('edit', '${mat.id}')" class="bg-slate-900 border border-slate-800 p-2 rounded-xl text-slate-400 hover:text-white transition"><i data-lucide="edit-3" class="w-4 h-4"></i></button>
                                         <button onclick="deleteMaterial('${mat.id}')" class="bg-slate-900 border border-slate-800 p-2 rounded-xl text-slate-400 hover:text-rose-400 transition"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
+                                        ` : ''}
                                     </div>
                                 </div>
                             </div>`;
@@ -4449,6 +4618,7 @@
                 title.innerText = "Add material";
                 form.reset();
                 inputId.value = "";
+                document.getElementById('mat-supplier').value = displayNameFor(currentUser);
                 document.getElementById('mat-folder').value = selectedFolderId === 'all' ? 'all' : selectedFolderId;
                 document.getElementById('mat-measure-by').value = 'weight';
                 document.getElementById('mat-concrete-role').value = '';
@@ -4468,7 +4638,7 @@
             document.getElementById('material-modal').classList.replace('flex', 'hidden');
         }
 
-        function saveMaterial(event) {
+        async function saveMaterial(event) {
             event.preventDefault();
             const id = document.getElementById('edit-material-id').value;
             const name = document.getElementById('mat-name').value.trim();
@@ -4476,6 +4646,7 @@
             const description = document.getElementById('mat-desc').value.trim();
             if (!name) return;
 
+            let payload;
             if (currentMaterialFormMode === 'concrete') {
                 const measureBy = document.getElementById('mat-measure-by').value || 'weight';
                 const price = parseFloat(document.getElementById('mat-concrete-price').value) || 0;
@@ -4486,69 +4657,51 @@
                 if (measureBy === 'weight' && !bulkDensity) { alert('Set the bulk density (kg per m³) so this material can convert into kg.'); return; }
                 if (!price) { alert(`Set the price per ${measureBy === 'weight' ? 'kg' : 'm³'}.`); return; }
 
-                if (id) {
-                    const m = materials.find(mat => mat.id === id);
-                    if (m) {
-                        m.name = name; m.price = price; m.folderId = folderId; m.description = description;
-                        m.measureBy = measureBy; m.bulkDensity = bulkDensity; m.concreteRole = concreteRole;
-                        if (temporaryBase64Image) m.images = [temporaryBase64Image];
-                    }
-                } else {
-                    materials.push({
-                        id: 'm_' + Date.now(), folderId, name, price, description, measureBy, bulkDensity, concreteRole,
-                        creator: globalSupplierProfile.name,
-                        images: temporaryBase64Image ? [temporaryBase64Image] : []
-                    });
-                }
-                syncStorage(); closeMaterialModal(); renderMaterials();
-                return;
+                payload = { folderId, name, price, description, measureBy, bulkDensity, concreteRole };
+                if (temporaryBase64Image) payload.images = [temporaryBase64Image];
+            } else {
+                const price = parseFloat(document.getElementById('mat-price').value) || 0;
+                const dimUnit = document.getElementById('mat-dim-unit').value;
+                const length = document.getElementById('mat-length').value;
+                const width = document.getElementById('mat-width').value;
+                const height = document.getElementById('mat-height').value;
+                const perUnit = document.getElementById('mat-per-unit').checked;
+                const code = document.getElementById('mat-code').value.trim();
+                const weight = document.getElementById('mat-weight').value;
+                const calc = readMaterialCalcFromForm();
+
+                if (!calc.purpose) { alert('Please choose what this material is used for — it decides how its quantity gets calculated.'); return; }
+
+                // Catch a missing required spec (stock length, pipe diameter, layer thickness...) HERE,
+                // at creation, instead of leaving it to surface later as a confusing blocked-quantity
+                // message during mapping in Window 2, far removed from where it was actually set up.
+                const missingRequired = (CALC_METHODS[calc.method]?.params || []).find(p => p.required && calc[p.k] == null);
+                if (missingRequired) { alert(`Set "${missingRequired.label}" before saving this material.`); return; }
+
+                payload = {
+                    folderId, name, price, dimUnit, perUnit, code, description, calc,
+                    length: length || null, width: width || null, height: height || null, weight: weight || null
+                };
+                if (temporaryBase64Image) payload.images = [temporaryBase64Image];
             }
-
-            const price = parseFloat(document.getElementById('mat-price').value) || 0;
-            const dimUnit = document.getElementById('mat-dim-unit').value;
-            const length = document.getElementById('mat-length').value;
-            const width = document.getElementById('mat-width').value;
-            const height = document.getElementById('mat-height').value;
-            const perUnit = document.getElementById('mat-per-unit').checked;
-            const code = document.getElementById('mat-code').value.trim();
-            const supplier = document.getElementById('mat-supplier').value.trim();
-            const weight = document.getElementById('mat-weight').value;
-            const calc = readMaterialCalcFromForm();
-
-            if (!calc.purpose) { alert('Please choose what this material is used for — it decides how its quantity gets calculated.'); return; }
-
-            // Catch a missing required spec (stock length, pipe diameter, layer thickness...) HERE,
-            // at creation, instead of leaving it to surface later as a confusing blocked-quantity
-            // message during mapping in Window 2, far removed from where it was actually set up.
-            const missingRequired = (CALC_METHODS[calc.method]?.params || []).find(p => p.required && calc[p.k] == null);
-            if (missingRequired) { alert(`Set "${missingRequired.label}" before saving this material.`); return; }
 
             if (id) {
-                const m = materials.find(mat => mat.id === id);
-                if (m) {
-                    m.name = name; m.price = price; m.dimUnit = dimUnit;
-                    m.length = length; m.width = width; m.height = height; m.perUnit = perUnit;
-                    m.code = code; m.creator = supplier || globalSupplierProfile.name; m.folderId = folderId;
-                    m.weight = weight; m.description = description; m.calc = calc;
-                    if (temporaryBase64Image) m.images = [temporaryBase64Image];
-                }
+                await apiFetch(`/materials/${id}`, { method: 'PATCH', body: payload });
             } else {
-                const newMat = {
-                    id: 'm_' + Date.now(), folderId, name, price, dimUnit, length, width, height, perUnit,
-                    code, creator: supplier || globalSupplierProfile.name, weight, description, calc,
-                    images: temporaryBase64Image ? [temporaryBase64Image] : []
-                };
-                materials.push(newMat);
+                await apiFetch('/materials', { method: 'POST', body: payload });
             }
-            syncStorage(); closeMaterialModal(); renderMaterials();
+            await loadMaterialsFromApi();
+            closeMaterialModal();
+            renderMaterials();
         }
 
-        function deleteMaterial(id) {
+        async function deleteMaterial(id) {
             if (confirm("Remove this material from catalog permanently?")) {
-                materials = materials.filter(m => m.id !== id);
+                await apiFetch(`/materials/${id}`, { method: 'DELETE' });
                 selectedMaterials = selectedMaterials.filter(sm => sm !== id);
                 mappedRoomMaterials = mappedRoomMaterials.filter(mm => mm.materialId !== id);
-                syncStorage(); renderMaterials(); updateActionBar();
+                await loadMaterialsFromApi();
+                renderMaterials(); updateActionBar();
             }
         }
 
@@ -4574,13 +4727,10 @@
             document.getElementById('bulk-move-dropdown').classList.toggle('hidden');
         }
 
-        function moveSelectedToFolder(folderId) {
-            materials.forEach(m => {
-                if (selectedMaterials.includes(m.id)) {
-                    m.folderId = folderId;
-                }
-            });
-            syncStorage();
+        async function moveSelectedToFolder(folderId) {
+            const idsToMove = materials.filter(m => selectedMaterials.includes(m.id)).map(m => m.id);
+            await Promise.all(idsToMove.map(id => apiFetch(`/materials/${id}`, { method: 'PATCH', body: { folderId } })));
+            await loadMaterialsFromApi();
             clearSelection();
             document.getElementById('bulk-move-dropdown').classList.add('hidden');
             renderMaterials();
@@ -5353,15 +5503,18 @@
             }
         }
 
-        function saveProfileChanges(event) {
+        async function saveProfileChanges(event) {
             event.preventDefault();
-            const name = document.getElementById('edit-prof-name').value.trim();
-            if (name) {
-                globalSupplierProfile.name = name;
-                syncStorage();
-                updateGlobalHeaderProfileUI();
-                closeProfileModal();
-            }
+            const companyName = document.getElementById('edit-prof-name').value.trim();
+            currentUser = await apiFetch('/auth/me', { method: 'PATCH', body: { companyName } });
+            updateGlobalHeaderProfileUI();
+            closeProfileModal();
+        }
+
+        async function logout() {
+            await apiFetch('/auth/logout', { method: 'POST' }).catch(() => {});
+            currentUser = null;
+            location.reload();
         }
 
         // ================= WINDOW 3 CONTRACTOR DIRECT EXPENSE BOOKS =================

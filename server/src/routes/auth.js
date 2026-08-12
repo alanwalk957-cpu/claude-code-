@@ -79,4 +79,14 @@ router.get('/me', requireAuth, asyncHandler(async (req, res) => {
   res.json({ id: user.id, email: user.email, role: user.role, companyName: user.company_name });
 }));
 
+router.patch('/me', requireAuth, asyncHandler(async (req, res) => {
+  const { companyName } = req.body || {};
+  const { rows } = await pool.query(
+    'UPDATE users SET company_name = $1 WHERE id = $2 RETURNING id, email, role, company_name',
+    [companyName || null, req.user.id]
+  );
+  const user = rows[0];
+  res.json({ id: user.id, email: user.email, role: user.role, companyName: user.company_name });
+}));
+
 module.exports = router;

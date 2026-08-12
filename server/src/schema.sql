@@ -35,7 +35,10 @@ CREATE TABLE IF NOT EXISTS material_folders (
 -- only suppliers can create/edit/delete (enforced in routes/materials.js).
 CREATE TABLE IF NOT EXISTS materials (
   id             SERIAL PRIMARY KEY,
-  folder_id      INTEGER REFERENCES material_folders(id),
+  -- Plain text, not a FK: the frontend's fixed trade folders ("Piping", "Concrete", ...)
+  -- are hardcoded client-side string ids (not rows in material_folders), and materials
+  -- can live in either a fixed folder or a custom one — so this column has to accept both.
+  folder_id      TEXT,
   name           TEXT NOT NULL,
   code           TEXT,
   price          NUMERIC,
@@ -51,6 +54,9 @@ CREATE TABLE IF NOT EXISTS materials (
   concrete_role  TEXT,
   description    TEXT,
   images         JSONB NOT NULL DEFAULT '[]',
+  -- Quantity-calculation settings (purpose/method/params) used by Window 2's takeoff
+  -- engine — opaque to the backend, just carried through as JSON.
+  calc           JSONB,
   creator_id     INTEGER REFERENCES users(id),
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
