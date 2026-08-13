@@ -34,6 +34,9 @@ CREATE TABLE IF NOT EXISTS projects (
   owner_direct_paid_amount           NUMERIC NOT NULL DEFAULT 0,
   owner_direct_paid_status           TEXT NOT NULL DEFAULT 'Approved',
   owner_direct_paid_pending_val      NUMERIC NOT NULL DEFAULT 0,
+  -- Window 4 (Work Plan) project start date — previously an orphaned localStorage value
+  -- with no server home; every step's start/end is derived from this + plannedDays.
+  work_plan_start_date               DATE,
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

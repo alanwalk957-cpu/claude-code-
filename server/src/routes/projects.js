@@ -58,16 +58,26 @@ router.patch('/:projectId/engineer', requireAuth, requireProjectMember('projectI
 }));
 
 router.get('/:projectId/activity', requireAuth, requireProjectMember('projectId'), requireLedgerParty, asyncHandler(async (req, res) => {
+  const windowName = req.query.window === 'work_plan' ? 'work_plan' : 'ledger';
   const { rows } = await pool.query(
     `SELECT activity_log.*, users.company_name, users.email FROM activity_log
      LEFT JOIN users ON users.id = activity_log.actor_id
-     WHERE project_id = $1 AND window_name = 'ledger' ORDER BY created_at DESC LIMIT 500`,
-    [req.params.projectId]
+     WHERE project_id = $1 AND window_name = $2 ORDER BY created_at DESC LIMIT 500`,
+    [req.params.projectId, windowName]
   );
   // actor label is the role they held on THIS project, not their raw account name — matches
   // the app's existing "Owner"/"Contractor" activity-log labeling.
   const withRoleLabel = rows.map(r => ({ ...r, actorRole: projectRoleFor(req.project, r.actor_id) }));
   res.json(withRoleLabel);
+}));
+
+router.patch('/:projectId/work-plan-start-date', requireAuth, requireProjectMember('projectId'), requireLedgerParty, asyncHandler(async (req, res) => {
+  const { date } = req.body || {};
+  const { rows } = await pool.query(
+    'UPDATE projects SET work_plan_start_date = $1 WHERE id = $2 RETURNING *',
+    [date || null, req.params.projectId]
+  );
+  res.json(rows[0]);
 }));
 
 // Contractor-only: the markup percentage applied to the whole ledger.

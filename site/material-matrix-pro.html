@@ -2421,6 +2421,7 @@
             }
             await loadBlueprintDataFromApi();
             await loadLedgerDataFromApi();
+            await loadWorkPlanDataFromApi();
             applyRoleVisibility();
             initAppUI();
             renderProjectSelector();
@@ -2585,11 +2586,13 @@
             localStorage.setItem('w2_backend_project_id', currentProjectId || '');
             await loadBlueprintDataFromApi();
             await loadLedgerDataFromApi();
+            await loadWorkPlanDataFromApi();
             activeRoomId = null;
             renderRoomsList();
             evaluateActiveWorkspaceDisplay();
             renderW3Folders();
             renderW3Ledger();
+            w4Render();
         }
 
         async function createSharedProjectPrompt() {
@@ -11921,35 +11924,63 @@
             Plumbing: "text-pink-300 bg-pink-950/40 border-pink-800/50"
         };
 
-        // Persisted fields only — start/end dates are always DERIVED (see w4Recalc), never stored,
-        // so there's no Date (de)serialization to get wrong across a reload.
-        let w4Steps = (JSON.parse(localStorage.getItem('w4_steps')) || []).map(s => ({ ...s, start: new Date(), end: new Date() }));
-        let w4Seq = JSON.parse(localStorage.getItem('w4_seq')) || 1;
+        // w4Steps/w4HistoryLog are server-backed now, scoped to currentProjectId (see
+        // loadWorkPlanDataFromApi) — start/end dates stay DERIVED client-side (see w4Recalc),
+        // never stored, same as before.
+        let w4Steps = [];
+        let w4Seq = 1;
         let w4OpenId = null;
         let w4View = 'steps';
         // Tracks the previously-saved start date so w4OnStartDateChange can log the old → new value.
-        let w4LastStartDate = localStorage.getItem('w4_start_date') || '';
+        let w4LastStartDate = '';
         // Which materials-source tab (Window 1 / Window 2 / manual) is active per step, and which
-        // room/scope the "From Window 2" tab shows per step — persisted so a reload doesn't forget
-        // "Hall" was already picked and fall back to defaulting to the first room in the list.
+        // room/scope the "From Window 2" tab shows per step — stay local (pure per-browser view
+        // state, not shared data, same precedent as Window 1's folders).
         const w4MatModes = JSON.parse(localStorage.getItem('w4_mat_modes')) || {};
 
-        // Full audit trail of data-changing actions in the Work Plan — every step/labor/material/
-        // status/budget/date change, who did it, when. Mirrors w3ActivityLog/logActivity exactly.
-        // Pure UI navigation (opening a step, switching tabs/views, changing which room the picker
-        // shows) is deliberately NOT logged here — it doesn't change any data, and logging it would
-        // bury the real changes in noise.
-        let w4HistoryLog = JSON.parse(localStorage.getItem('w4_history_log')) || [];
+        // Full audit trail of data-changing actions in the Work Plan — server-backed now
+        // (activity_log table, window_name='work_plan'), scoped to currentProjectId.
+        let w4HistoryLog = [];
+
+        function applyApiWorkPlanStepShape(row) {
+            return {
+                id: String(row.id), name: row.name, area: row.area,
+                plannedDays: row.planned_days != null ? parseFloat(row.planned_days) : 0,
+                budget: row.budget != null ? parseFloat(row.budget) : 0, status: row.status,
+                start: new Date(), end: new Date(),
+                materials: (row.materials || []).map(m => ({
+                    id: String(m.id), name: m.name, cost: m.cost != null ? parseFloat(m.cost) : 0,
+                    unit: m.unit, qty: m.qty != null ? parseFloat(m.qty) : 0, bought: m.bought,
+                    source: m.source, materialId: m.material_id != null ? String(m.material_id) : null,
+                    roomId: m.room_id != null ? String(m.room_id) : null,
+                    mappingId: m.mapping_id != null ? String(m.mapping_id) : null,
+                    ledgerItemId: m.ledger_item_id != null ? String(m.ledger_item_id) : null
+                })),
+                labor: (row.labor || []).map(l => ({ id: String(l.id), desc: l.description, amount: l.amount != null ? parseFloat(l.amount) : 0 }))
+            };
+        }
+
+        async function loadWorkPlanDataFromApi() {
+            if (!currentProjectId) { w4Steps = []; w4HistoryLog = []; return; }
+            const project = findMyProject();
+            if (!myProjectRole(project)) { w4Steps = []; w4HistoryLog = []; return; }
+            w4LastStartDate = project.work_plan_start_date || '';
+            const startEl = document.getElementById('w4-start-date');
+            if (startEl) startEl.value = w4LastStartDate || new Date().toISOString().slice(0, 10);
+
+            const [stepRows, activityRows] = await Promise.all([
+                apiFetch(`/projects/${currentProjectId}/work-plan-steps`),
+                apiFetch(`/projects/${currentProjectId}/activity?window=work_plan`)
+            ]);
+            w4Steps = stepRows.map(applyApiWorkPlanStepShape);
+            w4HistoryLog = activityRows.map(applyApiActivityShape).reverse();
+            w4Recalc();
+        }
 
         function w4LogHistory(action, detail) {
-            const now = new Date();
-            w4HistoryLog.push({
-                id: 'w4log_' + now.getTime() + '_' + Math.random().toString(36).substr(2, 5),
-                at: now.getTime(),
-                atLabel: now.toLocaleDateString() + ' ' + now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                actor: w3CurrentRole, action, detail: detail || ''
-            });
-            if (w4HistoryLog.length > 500) w4HistoryLog = w4HistoryLog.slice(-500);
+            // Server-logged now (each work-plan-steps route call logs itself) — this stays only as
+            // a fallback no-op so any not-yet-converted caller doesn't throw; it has no effect on
+            // what's actually persisted, since w4HistoryLog gets overwritten on the next API load.
         }
 
         function w4OpenHistoryModal() {
@@ -11995,50 +12026,45 @@
         function w4StepTotal(s) { return w4MaterialsCost(s) + w4LaborCost(s); }
 
         const W4_FIELD_LABELS = { name: 'name', area: 'area', plannedDays: 'time to finish', budget: 'budget', status: 'status' };
-        function w4UpdateStepField(stepId, field, value) {
+        async function w4UpdateStepField(stepId, field, value) {
             const s = w4Steps.find(x => x.id === stepId);
             if (!s) return;
-            const stepContext = s.name;
-            const prev = s[field];
             s[field] = value;
-            if (prev !== value) {
-                const label = field === 'budget' ? w4Money(value) : field === 'plannedDays' ? value + ' day(s)' : value;
-                const prevLabel = field === 'budget' ? w4Money(prev) : field === 'plannedDays' ? prev + ' day(s)' : prev;
-                w4LogHistory(`Edited step ${W4_FIELD_LABELS[field] || field}`, `"${stepContext}": ${prevLabel} → ${label}`);
-            }
+            await apiFetch(`/projects/${currentProjectId}/work-plan-steps/${stepId}`, { method: 'PATCH', body: { [field]: value } });
+            await loadWorkPlanDataFromApi();
             if (field === 'plannedDays') w4Recalc(); else w4Render();
         }
-        function w4RemoveLaborLine(stepId, li) {
+        async function w4RemoveLaborLine(stepId, li) {
             const s = w4Steps.find(x => x.id === stepId);
             if (!s) return;
-            const [removed] = s.labor.splice(li, 1);
-            if (removed) w4LogHistory('Removed labor payment', `"${removed.desc || 'Payment'}" — ${w4Money(removed.amount)} on step "${s.name}"`);
+            const removed = s.labor[li];
+            if (!removed) return;
+            await apiFetch(`/projects/${currentProjectId}/work-plan-steps/${stepId}/labor/${removed.id}`, { method: 'DELETE' });
+            await loadWorkPlanDataFromApi();
             w4Render();
         }
-        function w4RemoveMaterialLine(stepId, mi) {
+        async function w4RemoveMaterialLine(stepId, mi) {
             const s = w4Steps.find(x => x.id === stepId);
             if (!s) return;
-            const [removed] = s.materials.splice(mi, 1);
-            if (removed) w4LogHistory('Removed material', `"${removed.name}" from step "${s.name}"`);
+            const removed = s.materials[mi];
+            if (!removed) return;
+            await apiFetch(`/projects/${currentProjectId}/work-plan-steps/${stepId}/materials/${removed.id}`, { method: 'DELETE' });
+            await loadWorkPlanDataFromApi();
             w4Render();
         }
 
         function w4Persist() {
-            const serializable = w4Steps.map(s => ({ id: s.id, name: s.name, area: s.area, plannedDays: s.plannedDays, budget: s.budget, status: s.status, materials: s.materials, labor: s.labor }));
-            localStorage.setItem('w4_steps', JSON.stringify(serializable));
-            localStorage.setItem('w4_seq', JSON.stringify(w4Seq));
-            const startEl = document.getElementById('w4-start-date');
-            if (startEl) localStorage.setItem('w4_start_date', startEl.value || '');
+            // Only the still-local pieces — steps/materials/labor/history are server-backed now
+            // (see loadWorkPlanDataFromApi and the mutator functions above).
             localStorage.setItem('w4_mat_modes', JSON.stringify(w4MatModes));
             localStorage.setItem('w4_room_picker_scope', JSON.stringify(w4RoomPickerScope));
-            localStorage.setItem('w4_history_log', JSON.stringify(w4HistoryLog));
         }
 
-        function w4OnStartDateChange() {
+        async function w4OnStartDateChange() {
             const startEl = document.getElementById('w4-start-date');
-            const prev = w4LastStartDate;
-            w4LastStartDate = startEl ? startEl.value : '';
-            if (prev !== w4LastStartDate) w4LogHistory('Changed project start date', `${prev || '(none)'} → ${w4LastStartDate || '(none)'}`);
+            const newDate = startEl ? startEl.value : '';
+            w4LastStartDate = newDate;
+            await apiFetch(`/projects/${currentProjectId}/work-plan-start-date`, { method: 'PATCH', body: { date: newDate || null } });
             w4Recalc();
         }
 
@@ -12311,7 +12337,7 @@
 
         // Pulls a material Window 2 already mapped straight into this step, with the SAME quantity
         // computeMappingCost derived for it there — not re-typed, so it can't drift from Window 2.
-        function w4AddMaterialFromRoomMapping(stepId, mappingId) {
+        async function w4AddMaterialFromRoomMapping(stepId, mappingId) {
             const s = w4Steps.find(x => x.id === stepId);
             const mapping = mappedRoomMaterials.find(m => m.id === mappingId);
             if (!s || !mapping) return;
@@ -12321,12 +12347,15 @@
             if (!mat || !scope) return;
             const calc = computeMappingCost(mat, mapping, scope);
             if (calc.blocked || !(calc.qty > 0)) return;
-            s.materials.push({ name: mat.name, cost: parseFloat(mat.price || 0), unit: materialUnitLabel(mat), qty: calc.qty, bought: false, source: 'window2', materialId: mat.id, roomId: scope.id, mappingId: mapping.id });
-            w4LogHistory('Added material', `"${mat.name}" (from ${scope.name}) to step "${s.name}"`);
+            await apiFetch(`/projects/${currentProjectId}/work-plan-steps/${stepId}/materials`, { method: 'POST', body: {
+                name: mat.name, cost: parseFloat(mat.price || 0), unit: materialUnitLabel(mat), qty: calc.qty,
+                source: 'window2', materialId: mat.id, roomId: scope.id, mappingId: mapping.id
+            }});
+            await loadWorkPlanDataFromApi();
             w4Render();
         }
 
-        function w4AddMaterialFromCatalog(id) {
+        async function w4AddMaterialFromCatalog(id) {
             const s = w4Steps.find(s => s.id === id);
             const sel = document.getElementById('w4-matSel-' + id);
             const qtyEl = document.getElementById('w4-matQty-' + id);
@@ -12334,62 +12363,59 @@
             const mat = materials.find(m => m.id === sel.value);
             const qty = +qtyEl.value || 0;
             if (!mat || qty <= 0) return;
-            s.materials.push({ name: mat.name, cost: parseFloat(mat.price || 0), unit: materialUnitLabel(mat), qty, bought: false, source: 'catalog', materialId: mat.id });
-            w4LogHistory('Added material', `"${mat.name}" x${qty} to step "${s.name}"`);
+            await apiFetch(`/projects/${currentProjectId}/work-plan-steps/${id}/materials`, { method: 'POST', body: {
+                name: mat.name, cost: parseFloat(mat.price || 0), unit: materialUnitLabel(mat), qty, source: 'catalog', materialId: mat.id
+            }});
+            await loadWorkPlanDataFromApi();
             w4Render();
         }
-        function w4AddMaterialManual(id) {
+        async function w4AddMaterialManual(id) {
             const s = w4Steps.find(s => s.id === id);
             const name = document.getElementById('w4-matNameM-' + id).value.trim();
             const qty = +document.getElementById('w4-matQtyM-' + id).value || 0;
             const cost = +document.getElementById('w4-matCostM-' + id).value || 0;
             if (!name || qty <= 0) return;
-            s.materials.push({ name, cost, unit: 'units', qty, bought: false, source: 'manual' });
-            w4LogHistory('Added material', `"${name}" x${qty} to step "${s.name}"`);
+            await apiFetch(`/projects/${currentProjectId}/work-plan-steps/${id}/materials`, { method: 'POST', body: {
+                name, cost, unit: 'units', qty, source: 'manual'
+            }});
+            await loadWorkPlanDataFromApi();
             w4Render();
         }
 
         // Marking a material "bought" logs a real entry into the Shared Ledger (Window 3) — through
         // the same mutual-approval "Pending Creation" flow every other ledger entry goes through, so
         // it shows up in the Pending Approvals inbox rather than being silently auto-approved.
-        function w4ToggleBought(stepId, mi, on) {
+        async function w4ToggleBought(stepId, mi, on) {
             const s = w4Steps.find(s => s.id === stepId);
             if (!s) return;
             const m = s.materials[mi];
             if (!m) return;
-            m.bought = on;
             // Only send a fresh Shared Ledger entry if this line was never sent, or its earlier
             // entry is no longer in the ledger (rejected or deleted in Window 3) — unchecking and
             // re-checking a still-pending/approved entry must never create a duplicate.
             const alreadySent = m.ledgerItemId && w3LedgerItems.some(i => i.id === m.ledgerItemId);
+            let ledgerItemId = m.ledgerItemId;
             if (on && !alreadySent) {
-                const now = Date.now();
-                const amount = m.qty * m.cost;
-                const newItem = {
-                    id: 'w3i_' + now, createdAt: now, folderId: 'all',
-                    name: m.name, supplier: '', price: m.cost, quantity: m.qty, unit: m.unit || 'units',
-                    paymentStatus: 'Debt', actualPayer: w3CurrentRole, payer: w3CurrentRole,
-                    dueDate: null, costCode: null,
-                    creator: w3CurrentRole, status: 'Pending Creation', pendingAction: 'create', requester: w3CurrentRole
-                };
-                w3LedgerItems.push(newItem);
-                m.ledgerItemId = newItem.id;
-                logActivity('Logged new entry', `"${m.name}" from Work Plan step "${s.name}" — ${w4Money(amount)}`);
-                syncStorage();
+                const newItem = await apiFetch(`/projects/${currentProjectId}/ledger-items`, { method: 'POST', body: {
+                    folderId: 'all', name: m.name, supplier: '', price: m.cost, quantity: m.qty, unit: m.unit || 'units',
+                    paymentStatus: 'Debt', actualPayer: w3CurrentRole, payer: w3CurrentRole
+                }});
+                ledgerItemId = newItem.id;
                 updatePendingApprovalsBadge();
             }
-            w4LogHistory(on ? 'Marked material bought' : 'Unmarked material bought', `"${m.name}" on step "${s.name}"`);
+            await apiFetch(`/projects/${currentProjectId}/work-plan-steps/${stepId}/materials/${m.id}`, { method: 'PATCH', body: { bought: on, ledgerItemId } });
+            await Promise.all([loadWorkPlanDataFromApi(), loadLedgerDataFromApi()]);
             w4Render();
         }
 
-        function w4AddLabor(id) {
+        async function w4AddLabor(id) {
             const s = w4Steps.find(s => s.id === id);
             const desc = document.getElementById('w4-labDesc-' + id);
             const amt = document.getElementById('w4-labAmt-' + id);
             const amount = +amt.value || 0;
             if (amount <= 0) return;
-            s.labor.push({ desc: desc.value, amount });
-            w4LogHistory('Added labor payment', `"${desc.value || 'Payment'}" — ${w4Money(amount)} on step "${s.name}"`);
+            await apiFetch(`/projects/${currentProjectId}/work-plan-steps/${id}/labor`, { method: 'POST', body: { description: desc.value, amount } });
+            await loadWorkPlanDataFromApi();
             w4Render();
         }
 
@@ -12438,30 +12464,30 @@
                 row.addEventListener('dragend', () => { row.classList.remove('dragging'); rows.forEach(r => r.classList.remove('drop-line')); });
                 row.addEventListener('dragover', e => { e.preventDefault(); row.classList.add('drop-line'); });
                 row.addEventListener('dragleave', () => row.classList.remove('drop-line'));
-                row.addEventListener('drop', e => {
+                row.addEventListener('drop', async e => {
                     e.preventDefault();
                     const to = +row.dataset.i;
                     if (dragI === null || dragI === to) return;
                     const [moved] = w4Steps.splice(dragI, 1);
                     w4Steps.splice(to, 0, moved);
-                    w4LogHistory('Reordered step', `"${moved.name}" moved from position ${dragI + 1} to ${to + 1}`);
+                    await apiFetch(`/projects/${currentProjectId}/work-plan-steps/reorder`, { method: 'POST', body: { stepIds: w4Steps.map(s => s.id) } });
+                    await loadWorkPlanDataFromApi();
                     w4Recalc();
                 });
             });
         }
 
-        function w4AddStep() {
-            const s = { id: w4Uid(), name: "New step", area: "Base", plannedDays: 1, budget: 0, status: "not", materials: [], labor: [], start: new Date(), end: new Date() };
-            w4Steps.push(s);
-            w4OpenId = s.id;
-            w4LogHistory('Added step', `"${s.name}"`);
+        async function w4AddStep() {
+            const created = await apiFetch(`/projects/${currentProjectId}/work-plan-steps`, { method: 'POST', body: { name: 'New step', area: 'Base', plannedDays: 1, budget: 0, status: 'not' } });
+            await loadWorkPlanDataFromApi();
+            w4OpenId = String(created.id);
             w4Recalc();
         }
-        function w4RemoveStep(i) {
+        async function w4RemoveStep(i) {
             const removed = w4Steps[i];
             if (w4OpenId === removed.id) w4OpenId = null;
-            w4Steps.splice(i, 1);
-            w4LogHistory('Removed step', `"${removed.name}"`);
+            await apiFetch(`/projects/${currentProjectId}/work-plan-steps/${removed.id}`, { method: 'DELETE' });
+            await loadWorkPlanDataFromApi();
             w4Recalc();
         }
 
@@ -12475,9 +12501,10 @@
         }
 
         (function w4Init() {
-            const savedDate = localStorage.getItem('w4_start_date');
+            // Just a safe pre-login default — loadWorkPlanDataFromApi() sets the real value
+            // (project.work_plan_start_date) once a project is selected.
             const startEl = document.getElementById('w4-start-date');
-            if (startEl) startEl.value = savedDate || new Date().toISOString().slice(0, 10);
+            if (startEl) startEl.value = new Date().toISOString().slice(0, 10);
             w4SetView('steps');
             w4Recalc();
         })();
